@@ -2,6 +2,8 @@
 
 同一构建的动态标题规则补充验收见 [阶段 14](phase-14.md)；本页保留阶段 13 的脚本版本和计时结果。
 
+历史构建：本页对应 734960C2 EXE；新构建的配置读取性能修复见 [阶段 15](phase-15.md)。
+
 日期：2026-10-17（Asia/Shanghai）。上一轮已提交设置草稿修复并完成新构建回归。本轮针对 F08 和正常恢复分布，补浏览器、编辑器实际热键证据；功能验收继续先于集中外观与交互打磨。
 
 ## 范围与方法
@@ -21,7 +23,7 @@
 
 | 工件 | SHA256 |
 | --- | --- |
-| [ZIP](../../dist/ScreenPin-0.1.0-windows-x64.zip) | `1DECF740817DF6B7E3B41FC20573FD2F685D6EA89CDD347DC0E76C865DB188C0` |
+| [历史 ZIP 校验记录](../../artifacts/packages/package-a9f48db8e4a1416ab66a1ec5fca252a5/package-verification.json) | `1DECF740817DF6B7E3B41FC20573FD2F685D6EA89CDD347DC0E76C865DB188C0` |
 | Release EXE | `734960C2508A2A45B2A6108AFD57FB4256D74AE133350427F7145F0FA4D5B41B` |
 
 [完整报告](../../artifacts/apps-phase-13-release/application-smoke.json) 通过；[原始命令输出](../../artifacts/validation/phase-13-applications-output.txt) 保留参数对应的结果。环境：Win11 企业版 10.0.26300、单屏 2560×1440／工作区 2560×1392、96 DPI、普通权限。

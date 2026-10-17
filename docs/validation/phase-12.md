@@ -2,6 +2,8 @@
 
 同一构建的浏览器／编辑器真实热键状态补充验收见 [阶段 13](phase-13.md)。
 
+历史构建：本页对应 734960C2 EXE；新构建的配置读取性能修复见 [阶段 15](phase-15.md)。
+
 日期：2026-10-17（Asia/Shanghai）。本轮修复设置页未保存输入被后台响应清除的问题；功能和稳定性验收继续进行，集中外观与交互打磨安排在其后。
 
 ## 复现与修复
@@ -33,7 +35,7 @@
 
 | 工件 | SHA256 |
 | --- | --- |
-| [ZIP](../../dist/ScreenPin-0.1.0-windows-x64.zip) | `1DECF740817DF6B7E3B41FC20573FD2F685D6EA89CDD347DC0E76C865DB188C0` |
+| [历史 ZIP 校验记录](../../artifacts/packages/package-a9f48db8e4a1416ab66a1ec5fca252a5/package-verification.json) | `1DECF740817DF6B7E3B41FC20573FD2F685D6EA89CDD347DC0E76C865DB188C0` |
 | Release EXE／解压 EXE | `734960C2508A2A45B2A6108AFD57FB4256D74AE133350427F7145F0FA4D5B41B` |
 
 格式、严格 Clippy、all-targets **62 项测试**及离线构建打包通过。[嵌入清单](../../artifacts/validation/phase-12-embedded.manifest) 为 PerMonitorV2／asInvoker，[导入依赖](../../artifacts/validation/phase-12-dependencies.txt) 保留系统 DLL 检查证据。旧构建覆盖保存在 [阶段 11 历史快照](phase-11-coverage.md)。

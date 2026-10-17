@@ -1,6 +1,6 @@
 use crate::model::Config;
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -218,8 +218,14 @@ fn read_config(path: &Path) -> Result<Config, String> {
     if file.metadata().map_err(|e| e.to_string())?.len() > 8 * 1024 * 1024 {
         return Err("配置超过 8 MiB，已暂停写入以保留原文件".into());
     }
-    let value: serde_json::Value =
-        serde_json::from_reader(file).map_err(|e| format!("配置 JSON 损坏：{e}"))?;
+    decode_config(file)
+}
+
+fn decode_config(reader: impl Read) -> Result<Config, String> {
+    // serde_json does not buffer Read: a bare File causes one OS read per byte.
+    // Buffer before decoding so supported large files do not stall startup.
+    let value: serde_json::Value = serde_json::from_reader(BufReader::new(reader))
+        .map_err(|e| format!("配置 JSON 损坏：{e}"))?;
     let version = value
         .get("schema_version")
         .and_then(|v| v.as_u64())
@@ -275,6 +281,38 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn configuration_decoder_batches_underlying_file_reads() {
+        struct CountedFile<'a> {
+            file: File,
+            calls: &'a std::cell::Cell<usize>,
+        }
+        impl Read for CountedFile<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.calls.set(self.calls.get() + 1);
+                self.file.read(buffer)
+            }
+        }
+
+        let dir = TestDir::new();
+        let expected = Config::default();
+        let mut bytes = serde_json::to_vec(&expected).unwrap();
+        bytes.resize(32 * 1024, b' ');
+        let path = dir.0.join("config.json");
+        fs::write(&path, bytes).unwrap();
+        let calls = std::cell::Cell::new(0);
+        let reader = CountedFile {
+            file: File::open(path).unwrap(),
+            calls: &calls,
+        };
+        assert_eq!(decode_config(reader).unwrap(), expected);
+        assert!(
+            calls.get() <= 16,
+            "32 KiB configuration issued {} underlying file reads",
+            calls.get()
+        );
     }
 
     #[test]

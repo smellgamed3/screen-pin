@@ -1,5 +1,7 @@
 # 阶段 14：浏览器与编辑器动态标题规则
 
+历史构建：本页对应 734960C2 EXE；新构建的配置读取性能修复见 [阶段 15](phase-15.md)。
+
 日期：2026-10-17（Asia/Shanghai）。上一轮真实热键状态检查已提交。本轮补 F01 的实际浏览器／编辑器标题变化，核对特定规则、首条优先、默认回退和更新范围；功能验收继续先于集中外观与交互打磨。
 
 ## 方法与范围
@@ -22,7 +24,7 @@
 
 | 工件 | SHA256 |
 | --- | --- |
-| [ZIP](../../dist/ScreenPin-0.1.0-windows-x64.zip) | `1DECF740817DF6B7E3B41FC20573FD2F685D6EA89CDD347DC0E76C865DB188C0` |
+| [历史 ZIP 校验记录](../../artifacts/packages/package-a9f48db8e4a1416ab66a1ec5fca252a5/package-verification.json) | `1DECF740817DF6B7E3B41FC20573FD2F685D6EA89CDD347DC0E76C865DB188C0` |
 | Release EXE | `734960C2508A2A45B2A6108AFD57FB4256D74AE133350427F7145F0FA4D5B41B` |
 
 [最终完整报告](../../artifacts/apps-phase-14-final/application-smoke.json) 全部通过；[最终命令输出](../../artifacts/validation/phase-14-final-output.txt) 保留同次执行结果。环境：Win11 企业版 10.0.26300、单屏 2560×1440／工作区 2560×1392、96 DPI、普通权限。
