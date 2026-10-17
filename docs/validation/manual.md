@@ -15,6 +15,8 @@ $screenPinTestDir = Join-Path $env:LOCALAPPDATA ('ScreenPin-Acceptance-' + [Guid
 
 关闭主界面只是隐藏；一轮结束从托盘退出。不要同时运行多个不同测试配置争用同一对热键。手动记录预设基准时保存截图和实际边界，不能只凭“看起来差不多”判定精度。
 
+已有 Windows Sandbox 的机器可运行 `pwsh -NoProfile -File scripts/sandbox-smoke.ps1` 补充干净隔离桌面的发布包检查，结果范围见 [阶段 20](phase-20.md)。脚本拒绝接管已有 Sandbox，使用单独输入／输出目录并只清理自身创建的实例；这不替代下列物理设备和人工结果。
+
 ## 操作与判定
 
 | 项目 | 操作 | 判定及应记录内容 |
