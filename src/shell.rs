@@ -145,6 +145,15 @@ enum WorkerReply {
     Panicked,
 }
 
+struct EditorDraft {
+    base: PresetRow,
+    original_percent: [String; 4],
+    percent: [String; 4],
+    display_id: String,
+    maximized: bool,
+    keyword: String,
+}
+
 struct Shell {
     host: HWND,
     window: HWND,
@@ -159,6 +168,7 @@ struct Shell {
     replies: Receiver<WorkerReply>,
     busy: bool,
     operation_focus: Option<HWND>,
+    pending_editor_save: bool,
     exiting: bool,
     worker_failed: bool,
     registrations: Vec<Registration>,
@@ -326,6 +336,7 @@ unsafe fn run_native(
         replies: reply_rx,
         busy: false,
         operation_focus: None,
+        pending_editor_save: false,
         exiting: false,
         worker_failed: false,
         registrations: Vec::new(),
@@ -1030,6 +1041,7 @@ impl Shell {
             return;
         }
         let restart = matches!(request, Request::RestartElevated);
+        let editor_save = matches!(request, Request::EditPreset { .. });
         match self.requests.try_send(request) {
             Ok(()) => {
                 self.operation_focus = (unsafe { GetForegroundWindow() } == self.window)
@@ -1037,6 +1049,7 @@ impl Shell {
                     .filter(|focus| self.controls.iter().any(|control| control.hwnd == *focus));
                 self.busy = true;
                 self.pending_restart = restart;
+                self.pending_editor_save = editor_save;
                 self.text(ID_RESULT, "正在处理…");
                 self.update_enabled();
             }
@@ -1049,6 +1062,8 @@ impl Shell {
     }
     fn worker_ready(&mut self) {
         while let Ok(reply) = self.replies.try_recv() {
+            let draft = self.editor_draft();
+            let editor_saved = std::mem::take(&mut self.pending_editor_save);
             self.busy = false;
             match reply {
                 WorkerReply::Done(response) => {
@@ -1063,6 +1078,11 @@ impl Shell {
                     }
                     self.view = response.view;
                     self.refresh_controls();
+                    let draft_conflict = if editor_saved && response.success {
+                        false
+                    } else {
+                        draft.is_some_and(|draft| self.restore_editor_draft(draft))
+                    };
                     if let Some((hwnd, pid, token)) = old_selection
                         && let Some(index) = self
                             .view
@@ -1073,11 +1093,14 @@ impl Shell {
                         self.send(ID_WINDOWS, LB_SETCURSEL, index, 0);
                     }
                     self.match_preview();
-                    let message = if key_errors.is_empty() {
+                    let mut message = if key_errors.is_empty() {
                         response.message
                     } else {
                         format!("{}\r\n{}", response.message, key_errors.join("\r\n"))
                     };
+                    if draft_conflict {
+                        message.push_str("\r\n所选预设已更新，未保存编辑仍保留；请点击刷新载入最新值（会放弃草稿）。");
+                    }
                     self.result(&message, true);
                     if restarted {
                         self.exiting = true;
@@ -1296,6 +1319,67 @@ impl Shell {
             self.send(ID_PRESETS, LB_SETCURSEL, index, 0);
         }
         self.load_editor();
+    }
+
+    fn editor_draft(&self) -> Option<EditorDraft> {
+        let base = self.editor.clone()?;
+        let percent = [ID_X, ID_Y, ID_WIDTH, ID_HEIGHT].map(|id| self.value(id));
+        let display_id = self
+            .selection(ID_DISPLAY, true)
+            .and_then(|i| self.display_choices.get(i))?
+            .clone();
+        let maximized = self.checked(ID_MAXIMIZED);
+        let keyword = self.value(ID_EDIT_KEYWORD);
+        if percent == self.original_percent
+            && display_id == base.preset.placement.display_id
+            && maximized == base.preset.placement.maximized
+            && keyword == base.keyword.as_deref().unwrap_or("")
+        {
+            return None;
+        }
+        Some(EditorDraft {
+            base,
+            original_percent: self.original_percent.clone(),
+            percent,
+            display_id,
+            maximized,
+            keyword,
+        })
+    }
+
+    fn restore_editor_draft(&mut self, mut draft: EditorDraft) -> bool {
+        let Some(current) = self.editor.as_ref() else {
+            return false;
+        };
+        if current.profile_id != draft.base.profile_id
+            || current.app_id != draft.base.app_id
+            || current.preset.id != draft.base.preset.id
+        {
+            return false;
+        }
+        let Some(display) = self
+            .display_choices
+            .iter()
+            .position(|id| *id == draft.display_id)
+        else {
+            return false;
+        };
+        // Only an unchanged target can adopt a newer config revision. A change
+        // to this preset keeps its old base, so Save cannot overwrite it.
+        if current.preset == draft.base.preset && current.keyword == draft.base.keyword {
+            draft.base.base_revision = current.base_revision;
+        }
+        let conflict = draft.base.base_revision != self.view.config.revision;
+        self.editor = Some(draft.base);
+        self.original_percent = draft.original_percent;
+        for (id, text) in [ID_X, ID_Y, ID_WIDTH, ID_HEIGHT].iter().zip(&draft.percent) {
+            self.text(*id, text);
+        }
+        self.send(ID_DISPLAY, CB_SETCURSEL, display, 0);
+        self.check(ID_MAXIMIZED, draft.maximized);
+        self.text(ID_EDIT_KEYWORD, &draft.keyword);
+        self.update_enabled();
+        conflict
     }
 
     fn load_editor(&mut self) {
@@ -1598,6 +1682,12 @@ impl Shell {
         let editor = self.editor.clone().ok_or("请先选择预设。")?;
         if !self.editable() {
             return Err("未连接方案仅供查看。".into());
+        }
+        if editor.base_revision != self.view.config.revision {
+            return Err(
+                "所选预设已更新，未保存编辑仍保留；请点击刷新载入最新值后重试（会放弃草稿）。"
+                    .into(),
+            );
         }
         let mut placement = editor.preset.placement.clone();
         let values = [
@@ -2103,6 +2193,16 @@ impl Shell {
                     && let Err(error) = self.tray_add()
                 {
                     self.result(&error, false);
+                }
+                if !self.busy
+                    && !self.worker_failed
+                    && !self.exiting
+                    && self
+                        .editor
+                        .as_ref()
+                        .is_some_and(|editor| editor.base_revision != self.view.config.revision)
+                {
+                    self.load_editor();
                 }
                 self.submit(Request::Refresh);
                 Ok(())
@@ -2934,6 +3034,7 @@ mod tests {
                 replies,
                 busy: false,
                 operation_focus: None,
+                pending_editor_save: false,
                 exiting: false,
                 worker_failed: false,
                 registrations: vec![],

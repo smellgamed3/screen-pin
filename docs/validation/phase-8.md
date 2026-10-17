@@ -1,5 +1,7 @@
 # 阶段 8：确认框焦点修复与托盘键盘操作
 
+历史构建：EXE `C8603D7F…` 已由 [阶段 11](phase-11.md) 的预设草稿保护构建替代；旧版完整覆盖状态见 [阶段 10 快照](phase-10-coverage.md)。
+
 日期：2026-10-17（Asia/Shanghai）。本轮完成本机可执行的托盘和确认框键盘检查，发现并修复取消确认后键盘焦点丢失的问题。先完成功能、稳定性与验收，再优化外观和交互的顺序保持不变。
 
 相同二进制的普通启动／首次 UI 实际就绪计时补证见 [阶段 9](phase-9.md)。
@@ -40,7 +42,7 @@
 
 | 文件 | SHA256 |
 | --- | --- |
-| [ZIP](../../dist/ScreenPin-0.1.0-windows-x64.zip) | `23D2E5A6E6E381EF772316F004ED4F06B7CB26F80DADAFC692ED5CF2CC8A6622` |
+| ZIP 的 [历史校验记录](../../artifacts/packages/package-50f845177bea46c9b53af3a567f110ce/package-verification.json) | `23D2E5A6E6E381EF772316F004ED4F06B7CB26F80DADAFC692ED5CF2CC8A6622` |
 | Release EXE／解压 EXE | `C8603D7FBF25B5AA3269AAA05CDFCFE644DB0482ECB59422D86D6922A43470B2` |
 
 格式检查、严格 Clippy、all-targets **62 项测试**和离线 Release 打包通过。[嵌入清单](../../artifacts/validation/phase-8-embedded.manifest) 为 PerMonitorV2／asInvoker，[导入依赖](../../artifacts/validation/phase-8-dependencies.txt) 仅为系统 DLL；不代替干净机器实测。[ZIP 校验](../../artifacts/packages/package-50f845177bea46c9b53af3a567f110ce/package-verification.json) 含 34 条 GUI 检查，只有 EXE 和 README，解压哈希一致，退出无残留。

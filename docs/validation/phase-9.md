@@ -1,5 +1,7 @@
 # 阶段 9：普通启动的实际就绪时间
 
+历史构建：本阶段 EXE 为 `C8603D7F…`，最新构建见 [阶段 11](phase-11.md)。
+
 日期：2026-10-17（Asia/Shanghai）。本轮补齐 [启动验收](../acceptance.md) 的本机证据：测量真实托盘和两枚热键可用，以及首次主界面实际完成键盘捕获的时间。产品源码未修改，沿用 [阶段 8](phase-8.md) 的构建和完整回归。
 
 同一构建的 Explorer／Terminal 状态与动态标题真实热键补证见 [阶段 10](phase-10.md)。
@@ -11,7 +13,7 @@
 | 文件 | SHA256 |
 | --- | --- |
 | EXE | `C8603D7FBF25B5AA3269AAA05CDFCFE644DB0482ECB59422D86D6922A43470B2` |
-| [ZIP](../../dist/ScreenPin-0.1.0-windows-x64.zip) | `23D2E5A6E6E381EF772316F004ED4F06B7CB26F80DADAFC692ED5CF2CC8A6622` |
+| ZIP 的 [历史校验记录](../../artifacts/packages/package-50f845177bea46c9b53af3a567f110ce/package-verification.json) | `23D2E5A6E6E381EF772316F004ED4F06B7CB26F80DADAFC692ED5CF2CC8A6622` |
 
 源包版本 0.1.0。Windows 11 企业版 10.0.26300 x64、普通权限；AMD Ryzen 9 7950X3D；D: NTFS、Lexar SSD ARES 4TB（Windows 报告接口为 SCSI）；PowerShell 7.6.5。单屏 2560×1440／工作区 2560×1392、96 DPI。报告记录完整 EXE／脚本／三个辅助文件／原生 UIA 探针哈希及环境；EXE 本身没有 FileVersion 资源，不据文件名推断版本。
 
