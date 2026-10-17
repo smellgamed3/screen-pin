@@ -54,8 +54,40 @@ public static class PinRealKeys {
  private static string failure;
  private static string fixtureClass;
  private static bool held;
+ private static IntPtr rebuildingWindow;
+ private static readonly ManualResetEventSlim rebuilt=new ManualResetEventSlim(false);
+ private static string rebuildFailure;
+ private static long actionAppliedTicks;
+ private static IntPtr actionObserver;
+ private static uint observerPid;
+ private static int actionSawBusy=-1;
  public static IntPtr Fixture;
- private static IntPtr WindowProcedure(IntPtr h,uint m,IntPtr w,IntPtr l){if(m==0x8042)return new IntPtr(RegisterHotKey(h,1000+w.ToInt32(),0x4003,(uint)w.ToInt32())?1:0);if(m==0x8043)return new IntPtr(UnregisterHotKey(h,1000+w.ToInt32())?1:0);if(m==0x10){DestroyWindow(h);return IntPtr.Zero;}if(m==2){PostQuitMessage(0);return IntPtr.Zero;}return DefWindowProcW(h,m,w,l);}
+ private static IntPtr WindowProcedure(IntPtr h,uint m,IntPtr w,IntPtr l){
+  if(h==Fixture&&m>=0x8044&&m<=0x8046){
+   Thread.Sleep((int)Math.Max(0,Math.Min(5000,w.ToInt64())));
+   if(actionObserver!=IntPtr.Zero){uint owner;GetWindowThreadProcessId(actionObserver,out owner);var refresh=GetDlgItem(actionObserver,109);Interlocked.Exchange(ref actionSawBusy,owner==observerPid&&refresh!=IntPtr.Zero?(IsWindowEnabled(refresh)?0:1):-1);}
+   if(m==0x8045)DestroyWindow(h);
+   if(m==0x8046){
+    rebuildingWindow=h;DestroyWindow(h);
+    Fixture=CreateWindowExW(0,fixtureClass,"Screen Pin isolated real hotkey fixture",0x00cf0000,850,760,620,430,IntPtr.Zero,IntPtr.Zero,GetModuleHandleW(null),IntPtr.Zero);
+    rebuildingWindow=IntPtr.Zero;
+    if(Fixture==IntPtr.Zero)rebuildFailure="Replacement fixture creation failed";else ShowWindow(Fixture,4);
+   }
+   Interlocked.Exchange(ref actionAppliedTicks,System.Diagnostics.Stopwatch.GetTimestamp());
+   if(m==0x8046)rebuilt.Set();
+   return IntPtr.Zero;
+  }
+  if(m==0x8042)return new IntPtr(RegisterHotKey(h,1000+w.ToInt32(),0x4003,(uint)w.ToInt32())?1:0);
+  if(m==0x8043)return new IntPtr(UnregisterHotKey(h,1000+w.ToInt32())?1:0);
+  if(m==0x10){DestroyWindow(h);return IntPtr.Zero;}
+  if(m==2){if(h!=rebuildingWindow)PostQuitMessage(0);return IntPtr.Zero;}
+  return DefWindowProcW(h,m,w,l);
+ }
+ public static void Schedule(int operation,int milliseconds){AssertForeground();if(operation<0x8044||operation>0x8046||milliseconds<0||milliseconds>5000)throw new ArgumentException("Unsupported owned fixture schedule");Interlocked.Exchange(ref actionAppliedTicks,0);Interlocked.Exchange(ref actionSawBusy,-1);if(operation==0x8046){rebuilt.Reset();rebuildFailure=null;}if(!PostMessageW(Fixture,(uint)operation,new IntPtr(milliseconds),IntPtr.Zero))throw new InvalidOperationException("Fixture schedule failed");}
+ public static bool Rebuilt(){if(!rebuilt.IsSet)return false;if(rebuildFailure!=null)throw new InvalidOperationException(rebuildFailure);return true;}
+ public static long ActionAppliedTicks(){return Interlocked.Read(ref actionAppliedTicks);}
+ public static int ActionSawBusy(){return Interlocked.CompareExchange(ref actionSawBusy,0,0);}
+ public static void ObserveActions(IntPtr settings,uint expected){uint owner;GetWindowThreadProcessId(settings,out owner);var name=new StringBuilder(256);GetClassNameW(settings,name,name.Capacity);if(owner!=expected||name.ToString()!="ScreenPin.Settings")throw new InvalidOperationException("Action observer does not belong to the owned settings window");observerPid=expected;actionObserver=settings;}
  public static IntPtr StartFixture(){
   fixtureClass="ScreenPin.RealHotkeyFixture."+Guid.NewGuid().ToString("N");
   fixtureThread=new Thread(delegate(){try{
