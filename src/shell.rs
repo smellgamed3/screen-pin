@@ -80,6 +80,8 @@ const ID_NEW_RULE_PREVIEW: i32 = 139;
 const ID_REBIND: i32 = 140;
 const ID_REBIND_HINT: i32 = 141;
 const ID_CREATE_DEFAULT: i32 = 142;
+const ID_UNDO_TARGET_LABEL: i32 = 143;
+const ID_UNDO_TARGET: i32 = 144;
 const ID_SETTINGS_TITLE: i32 = 200;
 const ID_RESTORE_KEY_LABEL: i32 = 201;
 const ID_RESTORE_KEY: i32 = 202;
@@ -561,13 +563,13 @@ impl Shell {
         self.send(id, message, 0, wide(value).as_ptr() as isize);
         if message == LB_ADDSTRING {
             let current = self.send(id, LB_GETHORIZONTALEXTENT, 0, 0);
-            let extent = self.list_text_extent(id, value);
+            let extent = self.text_extent(id, value);
             if extent > current {
                 self.send(id, LB_SETHORIZONTALEXTENT, extent as usize, 0);
             }
         }
     }
-    fn list_text_extent(&self, id: i32, value: &str) -> isize {
+    fn text_extent(&self, id: i32, value: &str) -> isize {
         let text = wide(value);
         let padding = (8.0 * self.scale).ceil() as isize;
         // A conservative fallback keeps labels reachable if a DC/font cannot be acquired.
@@ -593,6 +595,10 @@ impl Shell {
             }
         }
     }
+    fn label_width(&self, id: i32, minimum: i32) -> i32 {
+        let text = self.value(id).replace('&', "");
+        ((self.text_extent(id, &text) as f64 / self.scale).ceil() as i32).max(minimum)
+    }
     fn reset_list(&self, id: i32) {
         self.send(id, LB_RESETCONTENT, 0, 0);
         self.send(id, LB_SETHORIZONTALEXTENT, 0, 0);
@@ -611,7 +617,7 @@ impl Shell {
             let used = self.send(id, LB_GETTEXT, index, text.as_mut_ptr() as isize);
             if used >= 0 {
                 let text = String::from_utf16_lossy(&text[..(used as usize).min(text.len())]);
-                extent = extent.max(self.list_text_extent(id, &text));
+                extent = extent.max(self.text_extent(id, &text));
             }
         }
         self.send(id, LB_SETHORIZONTALEXTENT, extent as usize, 0);
@@ -737,7 +743,15 @@ impl Shell {
                 button,
             ),
             (ID_REBIND_HINT, 1, "STATIC", "", label),
-            (ID_UNDO, 0, "BUTTON", "撤销最近一次更新(&Z)", button),
+            (ID_UNDO, 0, "BUTTON", "撤销更新(&Z)", button),
+            (ID_UNDO_TARGET_LABEL, 0, "STATIC", "目标", label),
+            (
+                ID_UNDO_TARGET,
+                0,
+                "EDIT",
+                "暂无可撤销更新",
+                edit | WINDOW_STYLE(ES_READONLY as u32),
+            ),
             (ID_RESULT_LABEL, 0, "STATIC", "最近结果", label),
             (
                 ID_RESULT,
@@ -1772,12 +1786,10 @@ impl Shell {
             available && !self.view.read_only && self.view.undo_label.is_some(),
         );
         self.text(
-            ID_UNDO,
-            &format!(
-                "撤销：{}(&Z)",
-                self.view.undo_label.as_deref().unwrap_or("暂无可撤销更新")
-            ),
+            ID_UNDO_TARGET,
+            self.view.undo_label.as_deref().unwrap_or("暂无可撤销更新"),
         );
+        self.enable(ID_UNDO_TARGET, self.view.undo_label.is_some());
         for id in [
             ID_DISPLAY,
             ID_X,
@@ -2822,8 +2834,15 @@ impl Shell {
         let y = row + 24;
         if self.page == PAGE_MAIN {
             self.place(ID_INTRO, margin, y, width, row * 2);
-            self.place(ID_PROFILE_LABEL, margin, y + row * 2, 100, row);
-            self.place(ID_PROFILE, margin + 110, y + row * 2, width - 110, row * 7);
+            let profile_label = self.label_width(ID_PROFILE_LABEL, 100).min(width / 2);
+            self.place(ID_PROFILE_LABEL, margin, y + row * 2, profile_label, row);
+            self.place(
+                ID_PROFILE,
+                margin + profile_label + 10,
+                y + row * 2,
+                width - profile_label - 10,
+                row * 7,
+            );
             self.place(ID_ENV, margin, y + row * 3 + 4, width, row * 2);
             let left = (width - gap) / 2;
             let right = margin + left + gap;
@@ -2867,12 +2886,19 @@ impl Shell {
                 width,
                 row,
             );
-            self.place(ID_DISPLAY_LABEL, margin, editor_y + row * 17 + 24, 110, row);
+            let display_label = self.label_width(ID_DISPLAY_LABEL, 110).min(width / 2);
+            self.place(
+                ID_DISPLAY_LABEL,
+                margin,
+                editor_y + row * 17 + 24,
+                display_label,
+                row,
+            );
             self.place(
                 ID_DISPLAY,
-                margin + 120,
+                margin + display_label + 10,
                 editor_y + row * 17 + 24,
-                width - 120,
+                width - display_label - 10,
                 row * 7,
             );
             let cell = (width - 3 * gap) / 4;
@@ -2927,14 +2953,30 @@ impl Shell {
             );
         } else if self.page == PAGE_SETTINGS {
             self.place(ID_SETTINGS_TITLE, margin, y, width, row * 2);
-            self.place(ID_RESTORE_KEY_LABEL, margin, y + row * 2, 180, row);
-            self.place(ID_RESTORE_KEY, margin + 190, y + row * 2, width - 190, row);
-            self.place(ID_REMEMBER_KEY_LABEL, margin, y + row * 3 + 8, 180, row);
+            let key_label = self
+                .label_width(ID_RESTORE_KEY_LABEL, 180)
+                .max(self.label_width(ID_REMEMBER_KEY_LABEL, 180))
+                .min(width / 2);
+            self.place(ID_RESTORE_KEY_LABEL, margin, y + row * 2, key_label, row);
+            self.place(
+                ID_RESTORE_KEY,
+                margin + key_label + 10,
+                y + row * 2,
+                width - key_label - 10,
+                row,
+            );
+            self.place(
+                ID_REMEMBER_KEY_LABEL,
+                margin,
+                y + row * 3 + 8,
+                key_label,
+                row,
+            );
             self.place(
                 ID_REMEMBER_KEY,
-                margin + 190,
+                margin + key_label + 10,
                 y + row * 3 + 8,
-                width - 190,
+                width - key_label - 10,
                 row,
             );
             self.place(ID_KEY_HELP, margin, y + row * 4 + 16, width, row * 2);
@@ -2986,12 +3028,19 @@ impl Shell {
             );
         } else {
             self.place(ID_ASSOC_TITLE, margin, y, width, row * 2);
-            self.place(ID_ASSOC_PROFILE_LABEL, margin, y + row * 2, 180, row);
+            let associate_label = self.label_width(ID_ASSOC_PROFILE_LABEL, 180).min(width / 2);
+            self.place(
+                ID_ASSOC_PROFILE_LABEL,
+                margin,
+                y + row * 2,
+                associate_label,
+                row,
+            );
             self.place(
                 ID_ASSOC_PROFILE,
-                margin + 190,
+                margin + associate_label + 10,
                 y + row * 2,
-                width - 190,
+                width - associate_label - 10,
                 row * 7,
             );
             self.place(ID_IDENTIFY, margin, y + row * 3 + 8, 200, row);
@@ -3006,7 +3055,23 @@ impl Shell {
             self.place(ID_ASSOC_HELP, margin, y + row * 15 + 56, width, row * 2);
             self.place(ID_CREATE_ENVIRONMENT, margin, y + row * 17 + 64, 280, row);
         }
-        self.place(ID_UNDO, margin, footer_top + 8, width, row);
+        let undo_width = (self.label_width(ID_UNDO, 100) + 16).min(width / 3);
+        let target_label = self.label_width(ID_UNDO_TARGET_LABEL, 32);
+        self.place(ID_UNDO, margin, footer_top + 8, undo_width, row);
+        self.place(
+            ID_UNDO_TARGET_LABEL,
+            margin + undo_width + gap,
+            footer_top + 8,
+            target_label,
+            row,
+        );
+        self.place(
+            ID_UNDO_TARGET,
+            margin + undo_width + target_label + 2 * gap,
+            footer_top + 8,
+            width - undo_width - target_label - 2 * gap,
+            row,
+        );
         if compact_feedback {
             let label_width = (row * 3).min(width / 3);
             self.place(

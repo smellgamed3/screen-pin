@@ -2,7 +2,7 @@
 param([string]$InputDir='C:\ScreenPinInput',[string]$OutputDir='C:\ScreenPinOutput')
 $ErrorActionPreference='Stop'
 $expected=Get-Content -LiteralPath (Join-Path $InputDir 'expected.json') -Raw -Encoding utf8|ConvertFrom-Json
-$report=[ordered]@{run_id=$expected.run_id;started_utc=[DateTime]::UtcNow.ToString('o');checks=@();startups=@();restores=@();normal_exits=@();scenes=@();focus=@();screenshots=@();text_metrics=@();errors=@();passed=$false;scope='Fresh isolated Sandbox only: actual system message-font and high-contrast changes, native bounds, owned foreground keyboard traversal and actual hotkeys. No host system setting changes; no Narrator or mixed-DPI claim.'}
+$report=[ordered]@{run_id=$expected.run_id;started_utc=[DateTime]::UtcNow.ToString('o');checks=@();startups=@();restores=@();normal_exits=@();scenes=@();focus=@();screenshots=@();text_metrics=@();undo_context=@();errors=@();passed=$false;scope='Fresh isolated Sandbox only: actual system message-font and high-contrast changes, native bounds, owned foreground keyboard traversal and actual hotkeys. No host system setting changes; no Narrator or mixed-DPI claim.'}
 $guestAllowed=$false;$savedMetrics=$null;$savedContrast=$null;$savedTheme=$null;$process=$null;$fixture=[IntPtr]::Zero;$oldDpi=[IntPtr]::Zero
 try{
  $identity=[Security.Principal.WindowsIdentity]::GetCurrent();$computer=Get-CimInstance Win32_ComputerSystem
@@ -24,7 +24,7 @@ try{
  Assert-Guest ($report.exe_sha256 -eq $expected.exe_sha256) 'Appearance executable matches release'
  Start-GuestApp;Wait-Guest {[PinApplication]::IsWindowVisible($settings)} 'first appearance UI'
  $fixture=[PinRealKeys]::StartFixture();Focus-Fixture;[PinRealKeys]::FixtureTitle('Screen Pin appearance '+$expected.run_id);Move-Fixture 80 90 380 280
- [PinRealKeys]::Chord(0x79);Wait-Guest {(Status-Guest) -match '^已记住'} 'initial actual capture';$baseline=Frame-Guest;Command-Guest 109;[PinRealKeys]::SelectWindow($settings,$process.Id,('Screen Pin appearance '+$expected.run_id));[PinViewport]::Message([PinViewport]::GetDlgItem($settings,117),$process.Id,0x186,0);Command-Guest (65536+117);$configHash=(Get-FileHash -LiteralPath $configPath).Hash
+ [PinRealKeys]::Chord(0x79);Wait-Guest {(Status-Guest) -match '^已记住'} 'initial actual capture';$baseline=Frame-Guest;Command-Guest 109;[PinRealKeys]::SelectWindow($settings,$process.Id,('Screen Pin appearance '+$expected.run_id));[PinViewport]::Message([PinViewport]::GetDlgItem($settings,117),$process.Id,0x186,0);Command-Guest (65536+117);$configHash=(Get-FileHash -LiteralPath $configPath).Hash;$savedConfig=Get-Content -LiteralPath $configPath -Raw -Encoding utf8|ConvertFrom-Json;$expectedUndoTarget=$savedConfig.profiles[0].name+' · '+$savedConfig.profiles[0].applications[0].app_name+' · 应用默认（同应用窗口共用）'
  function Focus-Fixture {[PinGuestAppearance]::Activate($fixture,$PID);[PinRealKeys]::AssertForeground()}
  function Focus-Appearance {
   [PinApplication]::ShowWindow($settings,9)|Out-Null
@@ -51,7 +51,7 @@ try{
  function Check-Appearance([string]$name){
   $deadline=[DateTime]::UtcNow.AddSeconds(2);$attempts=0;$watch=[Diagnostics.Stopwatch]::StartNew()
   do{
-   $client=[PinViewport]::Client($settings);$chrome=@();foreach($id in @(100,101,102,136,137,138)){$r=[PinViewport]::Bounds([PinViewport]::GetDlgItem($settings,$id));$chrome+=@{id=$id;rect=$r}}
+   $client=[PinViewport]::Client($settings);$chrome=@();foreach($id in @(100,101,102,136,137,138,143,144)){$r=[PinViewport]::Bounds([PinViewport]::GetDlgItem($settings,$id));$chrome+=@{id=$id;rect=$r}}
    $header=($chrome[0..2].rect.Bottom|Measure-Object -Maximum).Maximum;$footer=$chrome[3].rect.Top;$content=@([PinViewport]::Content($settings));$painted=@($content|Where-Object {$_.visible.Bottom -gt $_.visible.Top})
    $invalid=@($chrome|Where-Object {$_.rect.Left -lt $client.Left -or $_.rect.Top -lt $client.Top -or $_.rect.Right -gt $client.Right -or $_.rect.Bottom -gt $client.Bottom}).Count+@($painted|Where-Object {$_.visible.Top -lt $header -or $_.visible.Bottom -gt $footer}).Count
    $attempts++;if($invalid -eq 0 -and $painted.Count -gt 0){break};Start-Sleep -Milliseconds 20
@@ -68,6 +68,14 @@ try{
     $id=[PinDesktopKeyboard]::FocusId($settings,$process.Id);$r=[PinViewport]::Bounds([PinViewport]::GetDlgItem($settings,$id));$client=[PinViewport]::Client($settings)
     $box=@([PinViewport]::Content($settings)|Where-Object {$_.id -eq $id});$complete=$r.Left -ge $client.Left -and $r.Top -ge $client.Top -and $r.Right -le $client.Right -and $r.Bottom -le $client.Bottom
     if($box.Count -eq 1){$v=$box[0].visible;$complete=$complete -and $v.Left -eq $r.Left -and $v.Top -eq $r.Top -and $v.Right -eq $r.Right -and $v.Bottom -eq $r.Bottom}
+    if($id -eq 144){
+     $h=[PinViewport]::GetDlgItem($settings,144);$text=[PinRealKeys]::Text($settings,144)
+     Assert-Guest ($text -ceq $expectedUndoTarget -and [PinGuestAppearance]::ReadOnlyEdit($h)) 'Undo target preserves its complete scope in a read-only field'
+     [PinDesktopKeyboard]::Press($settings,$process.Id,0x23,0);Start-Sleep -Milliseconds 30;$end=[PinGuestAppearance]::FirstVisibleCharacter($h)
+     if([PinGuestAppearance]::TextWidth($h,$text) -gt $r.Right-$r.Left){Assert-Guest ($end -gt 0) 'End reveals the tail of a long Undo target'}
+     [PinDesktopKeyboard]::Press($settings,$process.Id,0x24,0);Start-Sleep -Milliseconds 30;$home=[PinGuestAppearance]::FirstVisibleCharacter($h);Assert-Guest ($home -eq 0 -and [PinRealKeys]::Text($settings,144) -ceq $text) 'Home reveals the beginning without changing Undo scope'
+     $report.undo_context+=@{scene=$name;reverse=$reverse;text=$text;first_after_end=$end;first_after_home=$home}
+    }
     $report.focus+=@{scene=$name;id=$id;reverse=$reverse;fully_visible=$complete;bounds=$r};Assert-Guest $complete ($name+': focused '+$id+' fully visible');$seen[$id]=$true
    }
   }
@@ -95,7 +103,7 @@ try{
    [PinViewport]::SetWindowPos($settings,[IntPtr]::Zero,40,40,$size[0],$size[1],0x4014)|Out-Null
    foreach($page in @(100,101,102)){
     Command-Guest $page;$name=$mode+'-'+$size[0]+'-page-'+$page
-    $labels=if($page -eq 100){@(104,136)}elseif($page -eq 101){@(201,203,136)}else{@(136)}
+    $labels=if($page -eq 100){@(104,136,143)}elseif($page -eq 101){@(201,203,136,143)}else{@(136,143)}
     foreach($id in $labels){$h=[PinViewport]::GetDlgItem($settings,$id);$text=[PinRealKeys]::Text($settings,$id);$r=[PinViewport]::Bounds($h);$measured=[PinGuestAppearance]::TextWidth($h,$text);$report.text_metrics+=@{scene=$name;id=$id;text=$text;measured_width_px=$measured;available_width_px=$r.Right-$r.Left;overflow=$measured -gt ($r.Right-$r.Left)}}
     [PinViewport]::Message($settings,$process.Id,0x115,6);Check-Appearance ($name+'-top');Image-Appearance ($name+'-top')
     [PinViewport]::Message($settings,$process.Id,0x115,7);Check-Appearance ($name+'-bottom')
@@ -117,7 +125,7 @@ finally{
  if($oldDpi -ne [IntPtr]::Zero){[PinApplication]::SetThreadDpiAwarenessContext($oldDpi)|Out-Null}
  $report['startup_registry_unchanged']=$startupBefore -ceq [Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run','ScreenPin',$null)
  $report['functional_checks_passed']=$report.errors.Count -eq 0 -and $report.restores.Count -eq 3 -and $report.normal_exits.Count -eq 1 -and $report.guest_settings_restored -and $report.startup_registry_unchanged
- $report['readability_passed']=$report.text_metrics.Count -eq 36 -and @($report.text_metrics|Where-Object overflow).Count -eq 0;$report.passed=$report.functional_checks_passed -and $report.readability_passed;if(-not $report.readability_passed){$report.errors+='Readability gate: one-row label or Undo text is wider than its actual control'}
+ $report['readability_passed']=$report.text_metrics.Count -eq 54 -and @($report.text_metrics|Where-Object overflow).Count -eq 0;$report.passed=$report.functional_checks_passed -and $report.readability_passed;if(-not $report.readability_passed){$report.errors+='Readability gate: one-row label or Undo text is wider than its actual control'}
  $report['finished_utc']=[DateTime]::UtcNow.ToString('o');$report|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $OutputDir 'guest-report.json') -Encoding utf8
 }
 if(-not $report.passed){exit 1}

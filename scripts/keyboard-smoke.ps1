@@ -88,7 +88,7 @@ public static class PinKeyboard {
    if(control==IntPtr.Zero||!GetWindowRect(control,out child)||!GetClientRect(UI,out client))return false;
    MapWindowPoints(UI,IntPtr.Zero,ref client,2);
    if(child.Left<client.Left||child.Top<client.Top||child.Right>client.Right||child.Bottom>client.Bottom)return false;
-   if(id!=100&&id!=101&&id!=102&&id!=136&&id!=138){
+   if(id!=100&&id!=101&&id!=102&&id!=136&&id!=138&&id!=144){
     Rect nav,undo;if(!GetWindowRect(GetDlgItem(UI,100),out nav)||!GetWindowRect(GetDlgItem(UI,136),out undo)||child.Top<nav.Bottom||child.Bottom>undo.Top)return false;
    }
    var region=CreateRectRgn(0,0,0,0);if(region==IntPtr.Zero)return false;
@@ -164,7 +164,7 @@ try {
  Assert-Keyboard $true 'Tab and Space capture the selected application default'
  Tab-ToKeyboard 117;Select-Keyboard 117 0
  Wait-Keyboard {[PinKeyboard]::IsWindowVisible([PinKeyboard]::GetDlgItem([PinKeyboard]::UI,132))} 'selected preset editor'
- Names-Keyboard @(100,101,102,105,108,109,111,112,114,115,117,120,122,124,126,128,129,131,132,133,134,135,136,138,140) 'main'
+ Names-Keyboard @(100,101,102,105,108,109,111,112,114,115,117,120,122,124,126,128,129,131,132,133,134,135,136,138,144,140) 'main'
  Tab-ToKeyboard 122;Assert-Keyboard ([PinKeyboard]::FocusId() -eq 122) 'Tab focuses the position editor'
  Press-Keyboard 0x41 0x11;[PinKeyboard]::Type('12.5')
  $revision=(Config-Keyboard).revision
@@ -181,12 +181,12 @@ try {
  Tabs-Keyboard 'main'
  Tab-ToKeyboard 101;Press-Keyboard 0x20
  Wait-Keyboard {[PinKeyboard]::IsWindowVisible([PinKeyboard]::GetDlgItem([PinKeyboard]::UI,202))} 'settings page'
- Names-Keyboard @(100,101,102,202,204,206,207,210,211,213,136,138) 'settings'
+ Names-Keyboard @(100,101,102,202,204,206,207,210,211,213,136,138,144) 'settings'
  Tab-ToKeyboard 202;Assert-Keyboard ([PinKeyboard]::FocusId() -eq 202) 'Tab focuses the restore-hotkey setting'
  Tabs-Keyboard 'settings'
  Tab-ToKeyboard 102;Press-Keyboard 0x20
  Wait-Keyboard {[PinKeyboard]::IsWindowVisible([PinKeyboard]::GetDlgItem([PinKeyboard]::UI,302))} 'association page'
- Names-Keyboard @(100,101,102,302,303,305,307,308,309,310,312,136,138) 'association'
+ Names-Keyboard @(100,101,102,302,303,305,307,308,309,310,312,136,138,144) 'association'
  Tabs-Keyboard 'association'
  foreach($item in $report.uia){
   $expectedRole=if($item.id -in @(105,120,302,305,307)){50003}elseif($item.id -in @(108,117)){50008}elseif($item.id -in @(129,206)){50002}elseif($item.id -in @(114,122,124,126,128,131,138,202,204,210,309)){50004}else{50000}

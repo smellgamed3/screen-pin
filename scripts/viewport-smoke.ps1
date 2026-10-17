@@ -17,7 +17,7 @@ $startupBefore=[Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\
 function Assert-VP($value,[string]$message){if(-not $value){throw $message};$report.checks+=$message}
 function Wait-VP([scriptblock]$condition,[string]$name){$deadline=[DateTime]::UtcNow.AddSeconds(8);do{try{if(& $condition){return}}catch{if($_.Exception.Message -notmatch 'Timed out reading own app result'){throw}};Start-Sleep -Milliseconds 20}while([DateTime]::UtcNow -lt $deadline);throw ('Timeout: '+$name)}
 function Command-VP([int]$id){[PinRealKeys]::Command($settings,$process.Id,$id);Wait-VP {[PinRealKeys]::Text($settings,138) -notmatch '^正在处理'} ('GUI command '+$id)}
-function Chrome-VP {$rows=@();foreach($id in @(100,101,102,136,137,138)){$rows+=@{id=$id;rect=[PinViewport]::Bounds([PinViewport]::GetDlgItem($settings,$id))}};return $rows}
+function Chrome-VP {$rows=@();foreach($id in @(100,101,102,136,137,138,143,144)){$rows+=@{id=$id;rect=[PinViewport]::Bounds([PinViewport]::GetDlgItem($settings,$id))}};return $rows}
 function Check-VP([string]$scene){
  $client=[PinViewport]::Client($settings);$chrome=Chrome-VP;$header=($chrome[0..2].rect.Bottom|Measure-Object -Maximum).Maximum;$footer=$chrome[3].rect.Top
  foreach($row in $chrome){$r=$row.rect;Assert-VP ($r.Left -ge $client.Left -and $r.Top -ge $client.Top -and $r.Right -le $client.Right -and $r.Bottom -le $client.Bottom) ($scene+': fixed control '+$row.id+' is fully inside the window')}

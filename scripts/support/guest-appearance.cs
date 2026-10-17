@@ -19,6 +19,9 @@ public static class PinGuestAppearance {
  [DllImport("gdi32.dll")]private static extern IntPtr SelectObject(IntPtr dc,IntPtr value);
  [DllImport("gdi32.dll",CharSet=CharSet.Unicode)]private static extern bool GetTextExtentPoint32W(IntPtr dc,string text,int length,out Size size);
  [DllImport("user32.dll")]private static extern IntPtr SendMessageTimeoutW(IntPtr h,uint msg,IntPtr w,IntPtr l,uint flags,uint timeout,out UIntPtr value);
+ [DllImport("user32.dll",EntryPoint="GetWindowLongPtrW")]private static extern IntPtr GetWindowLongPtrW(IntPtr h,int index);
+ public static bool ReadOnlyEdit(IntPtr h){return (GetWindowLongPtrW(h,-16).ToInt64()&0x800)!=0;}
+ public static int FirstVisibleCharacter(IntPtr h){UIntPtr value;if(SendMessageTimeoutW(h,0xce,IntPtr.Zero,IntPtr.Zero,0x23,500,out value)==IntPtr.Zero)throw new InvalidOperationException("Owned edit scroll query timed out");return (int)value.ToUInt64();}
  public static int TextWidth(IntPtr window,string text){
   UIntPtr handle;if(SendMessageTimeoutW(window,0x31,IntPtr.Zero,IntPtr.Zero,0x23,500,out handle)==IntPtr.Zero)throw new InvalidOperationException("Owned font query timed out");
   Font font;if(GetObjectW(new IntPtr((long)handle.ToUInt64()),Marshal.SizeOf(typeof(Font)),out font)==0)throw new InvalidOperationException("Owned font metadata unavailable");

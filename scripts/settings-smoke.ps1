@@ -134,12 +134,12 @@ try{
         $initialPlacement=(Read-Settings).profiles[0].applications[0].default.placement|ConvertTo-Json -Depth 8 -Compress
         $initialFrame=[PinRealKeys]::Frame()
         $before=Hash-Settings;$backupBefore=(Get-FileHash -LiteralPath (Join-Path $configDir 'config.backup.json')).Hash
-        $undoBefore=[PinRealKeys]::Text($settings,136)
+        $undoBefore=[PinRealKeys]::Text($settings,144)
         Block-Storage 'backup-temp'
         try{
             Edit-Settings 0x7a 0x7b
             Assert-Settings ((Status-Settings) -match '^无法写入临时配置' -and (Hash-Settings) -eq $before -and (Get-FileHash -LiteralPath (Join-Path $configDir 'config.backup.json')).Hash -eq $backupBefore) 'Backup temporary creation failure preserves primary and backup bytes'
-            Assert-Settings ([PinRealKeys]::Text($settings,136) -ceq $undoBefore) 'Backup temporary creation failure retains the visible prior undo entry'
+            Assert-Settings ([PinRealKeys]::Text($settings,144) -ceq $undoBefore) 'Backup temporary creation failure retains the visible prior undo entry'
             Assert-Registered 0x78 0x79;Assert-Released 0x7a;Assert-Released 0x7b
             $report.storage_faults+=@{kind='backup-temp';status=Status-Settings;primary_hash=$before;backup_hash=$backupBefore;undo_label=$undoBefore}
         }finally{Clear-Storage}
@@ -148,14 +148,14 @@ try{
         Exercise-Settings 0x7a 0x7b 'after backup temporary failure retry'
         Edit-Settings 0x78 0x79
 
-        $before=Hash-Settings;$undoBefore=[PinRealKeys]::Text($settings,136);$savedFrame=[PinRealKeys]::Frame()
+        $before=Hash-Settings;$undoBefore=[PinRealKeys]::Text($settings,144);$savedFrame=[PinRealKeys]::Frame()
         $null=[PinRealKeys]::Move(580,380,490,360)
         Block-Storage 'primary-temp'
         try{
             [PinRealKeys]::Chord(0x79)
             Wait-Settings {(Status-Settings) -match '^无法写入临时配置'} 'primary temporary creation failure'
             Assert-Settings ((Hash-Settings) -eq $before -and (Get-FileHash -LiteralPath (Join-Path $configDir 'config.backup.json')).Hash -eq $before) 'Primary temporary creation failure retains primary and promotes only the prior valid config to backup'
-            Assert-Settings ([PinRealKeys]::Text($settings,136) -ceq $undoBefore) 'Failed real remember retains the visible prior undo entry'
+            Assert-Settings ([PinRealKeys]::Text($settings,144) -ceq $undoBefore) 'Failed real remember retains the visible prior undo entry'
             [PinRealKeys]::Chord(0x78)
             Wait-Settings {[PinRealKeys]::EdgeError([PinRealKeys]::Frame(),$savedFrame) -le 2 -and (Status-Settings) -match '^已恢复|^已符合预设'} 'runtime still restores the old placement after failed remember'
             Assert-Settings ((Hash-Settings) -eq $before) 'Old runtime placement remains authoritative after failed real remember'
