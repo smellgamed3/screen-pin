@@ -1003,6 +1003,27 @@ impl Shell {
         }
     }
 
+    fn synchronize_settings(&mut self, actual: &Settings) -> Vec<String> {
+        if self.active_settings == *actual {
+            return Vec::new();
+        }
+        // Recovery and explicit reset replace the persisted settings without
+        // going through prepare_settings. Follow that authoritative snapshot,
+        // including on a later topology error, rather than retaining stale keys.
+        self.active_settings = actual.clone();
+        let obsolete: Vec<_> = self
+            .registrations
+            .iter()
+            .filter(|r| r.key != actual.restore && r.key != actual.remember)
+            .map(|r| r.id)
+            .collect();
+        self.unregister_ids(&obsolete);
+        [actual.restore, actual.remember]
+            .into_iter()
+            .filter_map(|key| self.register(key).err())
+            .collect()
+    }
+
     fn submit(&mut self, request: Request) {
         if self.busy || self.worker_failed || self.exiting {
             self.result("正在处理上一项操作，请稍后重试。", false);
@@ -1035,6 +1056,7 @@ impl Shell {
                     let restarted = self.pending_restart && response.success;
                     self.pending_restart = false;
                     self.finish_settings(response.success, &response.view.config.settings);
+                    let key_errors = self.synchronize_settings(&response.view.config.settings);
                     let old_selection = self.selected_window();
                     if self.selected_profile == self.view.active_profile {
                         self.selected_profile = response.view.active_profile.clone();
@@ -1051,7 +1073,12 @@ impl Shell {
                         self.send(ID_WINDOWS, LB_SETCURSEL, index, 0);
                     }
                     self.match_preview();
-                    self.result(&response.message, true);
+                    let message = if key_errors.is_empty() {
+                        response.message
+                    } else {
+                        format!("{}\r\n{}", response.message, key_errors.join("\r\n"))
+                    };
+                    self.result(&message, true);
                     if restarted {
                         self.exiting = true;
                     }
@@ -3128,6 +3155,40 @@ mod tests {
             )
             .unwrap();
             UnregisterHotKey(Some(blocker), 904).unwrap();
+            // A recovered configuration is already durable. Adopt its mapping
+            // immediately, and release keys belonging only to the old config.
+            assert!(shell.synchronize_settings(&swapped).is_empty());
+            assert_eq!(shell.active_settings, swapped);
+            assert_eq!(shell.registrations.len(), 2);
+            RegisterHotKey(
+                Some(blocker),
+                905,
+                HOT_KEY_MODIFIERS(7) | MOD_NOREPEAT,
+                keys[2].key,
+            )
+            .unwrap();
+            // Recovery cannot undo an external hotkey conflict. The snapshot
+            // and status must still describe the recovered mapping, while the
+            // unaffected key remains registered and obsolete keys are released.
+            let errors = shell.synchronize_settings(&candidate);
+            assert_eq!(errors.len(), 1);
+            assert_eq!(shell.active_settings, candidate);
+            assert_eq!(shell.registrations.len(), 1);
+            assert_eq!(shell.registrations[0].key, candidate.remember);
+            RegisterHotKey(
+                Some(blocker),
+                906,
+                HOT_KEY_MODIFIERS(7) | MOD_NOREPEAT,
+                settings.restore.key,
+            )
+            .unwrap();
+            UnregisterHotKey(Some(blocker), 906).unwrap();
+            UnregisterHotKey(Some(blocker), 905).unwrap();
+            shell.busy = false;
+            shell.prepare_settings(candidate.clone()).unwrap();
+            let _ = received.recv().unwrap();
+            shell.finish_settings(true, &candidate);
+            assert_eq!(shell.registrations.len(), 2);
             drop(shell);
             let _ = DestroyWindow(host);
             let _ = DestroyWindow(blocker);

@@ -308,6 +308,43 @@ mod tests {
     }
 
     #[test]
+    fn repeated_load_save_and_recovery_preserve_full_placement_precision() {
+        let dir = TestDir::new();
+        let config: Config = serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "revision": 0,
+            "settings": crate::model::Settings::default(),
+            "displays": [{"id": "screen", "name": "Test", "fingerprints": []}],
+            "profiles": [{
+                "id": "profile", "name": "Test", "display_ids": ["screen"],
+                "applications": [{
+                    "app_id": "test.exe", "app_name": "Test", "rules": [],
+                    "default": {"id": "preset", "revision": 0, "placement": {
+                        "display_id": "screen", "maximized": false,
+                        "rect": {"x": -0.11328125, "y": 145.0 / 1392.0,
+                            "width": 0.27109375, "height": 459.0 / 1392.0}
+                    }}
+                }]
+            }]
+        }))
+        .unwrap();
+        let (mut store, _) = ConfigStore::open(dir.0.clone()).unwrap();
+        store.save(&config).unwrap();
+        let original = fs::read(store.path()).unwrap();
+        for _ in 0..20 {
+            let loaded = read_config(&store.path()).unwrap();
+            assert_eq!(loaded, config);
+            store.save(&loaded).unwrap();
+            assert_eq!(fs::read(store.path()).unwrap(), original);
+        }
+        drop(store);
+        fs::write(dir.0.join("config.json"), "{truncated").unwrap();
+        let (mut store, state) = ConfigStore::open(dir.0.clone()).unwrap();
+        assert!(matches!(state, LoadState::ReadOnly { .. }));
+        assert_eq!(store.recover_backup().unwrap(), config);
+        assert_eq!(fs::read(store.path()).unwrap(), original);
+    }
+
+    #[test]
     fn denied_replacement_leaves_primary_and_removes_temporary() {
         let dir = TestDir::new();
         let (mut store, _) = ConfigStore::open(dir.0.clone()).unwrap();

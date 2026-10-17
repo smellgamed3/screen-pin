@@ -1,6 +1,6 @@
 # 阶段 2：本机单屏、键盘与异常处理
 
-日期：2026-10-17（Asia/Shanghai）。本轮按用户要求先完成本机单屏测试；多屏等原有门槛继续有效，尚未宣布首版最终验收通过。[阶段 1](phase-1.md) 及其 [覆盖快照](phase-1-coverage.md) 保留为历史，当前覆盖以 [coverage.md](coverage.md) 为准。
+日期：2026-10-17（Asia/Shanghai）。本文已冻结为阶段 2 历史记录；最新构建见 [阶段 3](phase-3.md)。本轮按用户要求先完成本机单屏测试；多屏等原有门槛继续有效，尚未宣布首版最终验收通过。[阶段 1](phase-1.md) 及其 [覆盖快照](phase-1-coverage.md) 保留为历史，本阶段覆盖见 [历史快照](phase-2-coverage.md)，当前覆盖以 [coverage.md](coverage.md) 为准。
 
 ## 实测发现与修复
 
@@ -18,7 +18,7 @@
 
 | 文件 | SHA256 |
 | --- | --- |
-| [当前 ZIP](../../dist/ScreenPin-0.1.0-windows-x64.zip) | `3E3318A77E89712584459A7AA23A60A460CC447096D8DB9A2B575E97DDC27ABD` |
+| [阶段 2 历史包校验](../../artifacts/packages/package-7990c7af631c4d918b2d70b2973dc15e/package-verification.json) | `3E3318A77E89712584459A7AA23A60A460CC447096D8DB9A2B575E97DDC27ABD` |
 | Release EXE／解压后 EXE | `46A9FFF0DCE0E30B80121D4D82498BB99C7467E2E78D1658450FB72DA9D3FB28` |
 
 环境：Windows 11 企业版 10.0.26300、x64；单屏 2560×1440、工作区 2560×1392、96 DPI；普通权限。测试配置、应用 profile 和 fixture 均独立；日用配置与真实 HKCU Run 值未改写。
