@@ -31,6 +31,15 @@ $process=$null;$settings=[IntPtr]::Zero;$hostWindow=[IntPtr]::Zero;$runs=[Collec
 $startupBefore=[Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run','ScreenPin',$null)
 function Wait-ShellApp([scriptblock]$condition,[string]$description,[int]$seconds=15){$deadline=[DateTime]::UtcNow.AddSeconds($seconds);do{if(& $condition){return};Start-Sleep -Milliseconds 50}while([DateTime]::UtcNow -lt $deadline);throw ('Timeout: '+$description)}
 function Title-ShellApp([IntPtr]$handle){$text=[Text.StringBuilder]::new(32768);[PinApplication]::GetWindowTextW($handle,$text,$text.Capacity)|Out-Null;return $text.ToString()}
+function Read-FixtureFile([string]$path){
+    if(-not (Test-Path -LiteralPath $path -PathType Leaf)){return @{path=$path;exists=$false}}
+    try{$file=Get-Item -LiteralPath $path;if($file.Length -gt 65536){return @{path=$path;exists=$true;bytes=$file.Length;error='Diagnostic file exceeds 64 KiB'}};return @{path=$path;exists=$true;bytes=$file.Length;last_write_utc=$file.LastWriteTimeUtc.ToString('o');value=(Get-Content -LiteralPath $path -Raw|ConvertFrom-Json)}}catch{return @{path=$path;exists=$true;error=$_.Exception.Message}}
+}
+function Terminal-Diagnostics($run){
+    $child=if($run.child_pid){Get-CimInstance Win32_Process -Filter ('ProcessId='+$run.child_pid)}else{$null}
+    $identity=$child -and $child.ExecutablePath -ieq $run.child_executable -and $child.CommandLine.Contains($run.child_script)
+    return @{observed_utc=[DateTime]::UtcNow.ToString('o');child_pid=$run.child_pid;child_exists=[bool]$child;child_identity_matches=[bool]$identity;caption=$(if($run.handle -ne [IntPtr]::Zero){Title-ShellApp $run.handle}else{''});ready=(Read-FixtureFile $run.ready_path);command=(Read-FixtureFile $run.title_command);ack=(Read-FixtureFile $run.title_ack);fault=(Read-FixtureFile $run.fixture_error)}
+}
 function Frame-ShellApp([IntPtr]$handle){$rect=[PinApplication+Rect]::new();if([PinApplication]::DwmGetWindowAttribute($handle,9,[ref]$rect,16) -ne 0){throw 'DWM frame query failed'};return @{left=$rect.Left;top=$rect.Top;right=$rect.Right;bottom=$rect.Bottom}}
 function Error-ShellApp($a,$b){$maximum=0;foreach($edge in @('left','top','right','bottom')){$maximum=[Math]::Max($maximum,[Math]::Abs($a[$edge]-$b[$edge]))};return $maximum}
 function Existing-ShellAppHandles {return @([PinRealKeys]::FindClass('CabinetWClass',0))+@([PinRealKeys]::FindClass('CASCADIA_HOSTING_WINDOW_CLASS',0))}
@@ -182,7 +191,15 @@ function Set-ShellAppTitle($run,[string]$variant){
     }else{
         $sequence=[Guid]::NewGuid().ToString('N');$title=$run.title+$(if($variant -eq 'Default'){''}else{' '+$variant})
         [IO.File]::WriteAllText($run.title_command,(@{token=$run.title;sequence=$sequence;title=$title}|ConvertTo-Json))
-        Wait-HotShellApp $run {if(-not (Test-Path -LiteralPath $run.title_ack)){return $false};try{$ack=Get-Content -LiteralPath $run.title_ack -Raw|ConvertFrom-Json;$caption=Title-ShellApp $run.handle;return $ack.sequence -eq $sequence -and $caption.Contains($title) -and (Match-ShellAppTitle $caption $variant)}catch{return $false}} 'owned child shell title acknowledgement'
+        Wait-HotShellApp $run {
+            $fault=Read-FixtureFile $run.fixture_error
+            if($fault.exists -and $fault.value){
+                if($fault.value.token -ne $run.title -or $fault.value.pid -ne $run.child_pid){throw 'Terminal fixture error identity mismatch'}
+                throw ('Terminal fixture failed during '+$fault.value.phase+': '+$fault.value.message)
+            }
+            if(-not (Test-Path -LiteralPath $run.title_ack)){return $false}
+            try{$ack=Get-Content -LiteralPath $run.title_ack -Raw|ConvertFrom-Json;$caption=Title-ShellApp $run.handle;return $ack.sequence -eq $sequence -and $ack.pid -eq $run.child_pid -and $caption.Contains($title) -and (Match-ShellAppTitle $caption $variant)}catch{return $false}
+        } 'owned child shell title acknowledgement'
     }
     Confirm-ShellApp $run|Out-Null;return @{variant=$variant;before=$before;after=Title-ShellApp $run.handle;hwnd=$run.handle.ToInt64()}
 }
@@ -242,34 +259,18 @@ try{
     if(-not $terminalPackage){throw 'Windows Terminal package is unavailable'}
     $terminalExe=Join-Path $terminalPackage.InstallLocation 'WindowsTerminal.exe'
     $terminalAlias=Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\wt.exe'
-    $taskScript=Join-Path $runDir 'terminal-fixture.ps1';$readyPath=Join-Path $runDir 'terminal-ready.json';$titleCommand=Join-Path $runDir 'terminal-title-command.json';$titleAck=Join-Path $runDir 'terminal-title-ack.json'
+    $taskScript=Join-Path $runDir 'terminal-fixture.ps1';$readyPath=Join-Path $runDir 'terminal-ready.json';$titleCommand=Join-Path $runDir 'terminal-title-command.json';$titleAck=Join-Path $runDir 'terminal-title-ack.json';$fixtureError=Join-Path $runDir 'terminal-fixture-error.json'
     $title='ScreenPin-Terminal-'+$token
-    $body=@'
-$ErrorActionPreference='Stop'
-$Host.UI.RawUI.WindowTitle='__TITLE__'
-@{pid=$PID;token='__TITLE__'}|ConvertTo-Json|Set-Content -LiteralPath '__READY__' -Encoding utf8
-Write-Host 'Screen Pin isolated terminal test. This window can be closed.'
-$commandPath='__COMMAND__'
-if($commandPath){
-    $lastSequence=''
-    while($true){
-        $command=$null
-        if(Test-Path -LiteralPath $commandPath){try{$command=Get-Content -LiteralPath $commandPath -Raw|ConvertFrom-Json}catch{}}
-        if($command -and $command.token -eq '__TITLE__' -and $command.sequence -ne $lastSequence -and $command.title.StartsWith('__TITLE__')){
-            $Host.UI.RawUI.WindowTitle=$command.title
-            @{sequence=$command.sequence;title=$command.title;pid=$PID}|ConvertTo-Json|Set-Content -LiteralPath '__ACK__' -Encoding utf8
-            $lastSequence=$command.sequence
-        }
-        Start-Sleep -Milliseconds 50
-    }
-}
-'@
-    [IO.File]::WriteAllText($taskScript,$body.Replace('__TITLE__',$title).Replace('__READY__',$readyPath.Replace("'","''")).Replace('__COMMAND__',$(if($TitleRules){$titleCommand.Replace("'","''")}else{''})).Replace('__ACK__',$titleAck.Replace("'","''")),[Text.UTF8Encoding]::new($true))
+    $fixtureSource=Join-Path $PSScriptRoot 'support/terminal-title-fixture.ps1'
+    Copy-Item -LiteralPath $fixtureSource -Destination $taskScript
+    $report['terminal_fixture_sha256']=(Get-FileHash -LiteralPath $taskScript).Hash
     $shellExe=(Get-Command pwsh.exe).Source
-    $terminal=[pscustomobject]@{kind='Terminal';handle=[IntPtr]::Zero;pid=0;executable=$terminalExe;title=$title;before=@(Existing-ShellAppHandles);child_pid=0;child_executable=$shellExe;child_script=$taskScript;closed=$false;app_id='';title_command=$titleCommand;title_ack=$titleAck}
+    $terminal=[pscustomobject]@{kind='Terminal';handle=[IntPtr]::Zero;pid=0;executable=$terminalExe;title=$title;before=@(Existing-ShellAppHandles);child_pid=0;child_executable=$shellExe;child_script=$taskScript;closed=$false;app_id='';title_command=$titleCommand;title_ack=$titleAck;ready_path=$readyPath;fixture_error=$fixtureError}
     $runs.Add($terminal)
     $titleMode=if($TitleRules){'--useApplicationTitle'}else{'--suppressApplicationTitle'}
-    $launcher=Start-Process -FilePath $terminalAlias -ArgumentList '-w','new','new-tab','--title',$title,$titleMode,('"'+$shellExe+'"'),'-NoLogo','-NoProfile','-NoExit','-File',('"'+$taskScript+'"') -WindowStyle Hidden -PassThru
+    $terminalArgs=@('-w','new','new-tab','--title',$title,$titleMode,('"'+$shellExe+'"'),'-NoLogo','-NoProfile','-NoExit','-File',('"'+$taskScript+'"'),'-Token',$title,'-ReadyPath',('"'+$readyPath+'"'),'-AckPath',('"'+$titleAck+'"'),'-ErrorPath',('"'+$fixtureError+'"'))
+    if($TitleRules){$terminalArgs+=@('-CommandPath',('"'+$titleCommand+'"'))}
+    $launcher=Start-Process -FilePath $terminalAlias -ArgumentList $terminalArgs -WindowStyle Hidden -PassThru
     Wait-ShellApp {
         if(-not (Test-Path -LiteralPath $readyPath)){return $false}
         $ready=Get-Content -LiteralPath $readyPath -Raw|ConvertFrom-Json;if($ready.token -ne $title){throw 'Terminal readiness token mismatch'};$terminal.child_pid=[uint32]$ready.pid
@@ -279,7 +280,7 @@ if($commandPath){
     if($HotkeyStates){$result['hotkey_states']=Exercise-HotStates $terminal}
     if($TitleRules){$result['title_rules']=Exercise-TitleRules $terminal}
     Close-ShellApp $terminal;$result.closed_normally=$terminal.closed;$report.applications+=$result
-}catch{$report.errors+=$_.Exception.Message}
+}catch{$report.errors+=$_.Exception.Message;$report['failure_stack']=$_.ScriptStackTrace;$report['terminal_diagnostics']=@($runs|Where-Object kind -eq 'Terminal'|ForEach-Object {Terminal-Diagnostics $_})}
 finally{
     foreach($run in $runs){try{Close-ShellApp $run}catch{$report.errors+=('Window cleanup: '+$_.Exception.Message)}}
     if($HotkeyStates -or $TitleRules){try{[PinRealKeys]::StopFixture()}catch{$report.errors+=('Bootstrap cleanup: '+$_.Exception.Message)}}
