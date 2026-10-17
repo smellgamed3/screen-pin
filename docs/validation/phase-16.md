@@ -1,5 +1,7 @@
 # 阶段 16：配置写入边界、备份与失败重试
 
+历史记录：本文对应 CB13762C 构建；当前界面及回归见 [阶段 17](phase-17.md)，当前需求状态见 [需求覆盖审计](coverage.md)。下面的数值与报告保留为当时的执行证据。
+
 日期：2026-10-17（Asia/Shanghai）。本轮关闭阶段 15 留下的具体待查项：写出的文件和读入上限必须一致，且失败不改主文件、备份、预设或撤销记录。
 
 ## 复现与修复
@@ -41,7 +43,7 @@
 
 | 工件 | SHA256 |
 | --- | --- |
-| [ZIP](../../dist/ScreenPin-0.1.0-windows-x64.zip) | `ADA930CA071E409C642382C29A3F73BC89F6C2C398D8521255F078B9F1A117DB` |
+| [历史 ZIP 校验记录](../../artifacts/packages/package-8ee481994a634600ad5a9c480faf6a7f/package-verification.json) | `ADA930CA071E409C642382C29A3F73BC89F6C2C398D8521255F078B9F1A117DB` |
 | Release EXE／解压 EXE | `CB13762CA387EBD7E84C17BDD5BB41785AC7BDB4AB2A9F86C41B2B2192367DFE` |
 
 格式、严格 Clippy、all-targets **66 项测试**及离线构建打包通过。[嵌入清单](../../artifacts/validation/phase-16-embedded.manifest) 为 PerMonitorV2／asInvoker，[依赖检查](../../artifacts/validation/phase-16-dependencies.txt) 仅系统 DLL。旧构建完整状态见 [阶段 15 历史快照](phase-15-coverage.md)。

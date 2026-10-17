@@ -1,16 +1,16 @@
 //! Native, event-driven Windows shell. All external operations run on one worker.
 use crate::model::{Hotkey, Preset, Settings};
 use crate::protocol::{Backend, DisplayBinding, Request, Response, View};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::mem::size_of;
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    COLOR_BTNFACE, ClientToScreen, CreateFontIndirectW, DEFAULT_GUI_FONT, DeleteObject,
-    GetMonitorInfoW, GetStockObject, HBRUSH, HFONT, MONITOR_DEFAULTTONEAREST, MONITORINFO,
-    MonitorFromWindow,
+    COLOR_BTNFACE, ClientToScreen, CreateFontIndirectW, CreateRectRgn, DEFAULT_GUI_FONT,
+    DeleteObject, GetMonitorInfoW, GetStockObject, HBRUSH, HFONT, MONITOR_DEFAULTTONEAREST,
+    MONITORINFO, MonitorFromWindow, SetWindowRgn,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::SetScrollInfo;
@@ -123,6 +123,7 @@ struct Control {
     id: i32,
     hwnd: HWND,
     page: i32,
+    clip: Cell<Option<[i32; 4]>>,
 }
 struct Registration {
     key: Hotkey,
@@ -190,9 +191,12 @@ struct Shell {
     page: i32,
     scroll: i32,
     content_height: i32,
+    content_top: i32,
+    content_bottom: i32,
     scale: f64,
     row: i32,
     font: HFONT,
+    section_font: HFONT,
     owned_font: bool,
     association: HashMap<String, String>,
     association_profile: Option<String>,
@@ -313,7 +317,7 @@ unsafe fn run_native(
             WS_EX_CONTROLPARENT,
             w!("ScreenPin.Settings"),
             w!("Screen Pin — 窗口位置"),
-            WS_OVERLAPPEDWINDOW | WS_VSCROLL,
+            WS_OVERLAPPEDWINDOW | WS_VSCROLL | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             1100,
@@ -357,9 +361,12 @@ unsafe fn run_native(
         page: PAGE_MAIN,
         scroll: 0,
         content_height: 0,
+        content_top: 0,
+        content_bottom: 0,
         scale: (unsafe { GetDpiForWindow(window) }.max(96) as f64) / 96.0,
         row: 30,
         font: HFONT::default(),
+        section_font: HFONT::default(),
         owned_font: false,
         association: HashMap::new(),
         association_profile: None,
@@ -639,7 +646,7 @@ impl Shell {
                 ID_PRESETS_LABEL,
                 1,
                 "STATIC",
-                "预设（特定规则按列表顺序优先匹配）(&E)",
+                "预设（规则从上到下匹配）(&E)",
                 label,
             ),
             (ID_PRESETS, 1, "LISTBOX", "", list),
@@ -836,7 +843,7 @@ impl Shell {
                     WINDOW_EX_STYLE::default(),
                     PCWSTR(wide(class).as_ptr()),
                     PCWSTR(wide(title).as_ptr()),
-                    WS_CHILD | style,
+                    WS_CHILD | WS_CLIPSIBLINGS | style,
                     0,
                     0,
                     0,
@@ -852,21 +859,22 @@ impl Shell {
                 SendMessageW(
                     hwnd,
                     WM_SETFONT,
-                    Some(WPARAM(self.font.0 as usize)),
+                    Some(WPARAM(self.control_font(id).0 as usize)),
                     Some(LPARAM(0)),
                 );
             }
-            self.controls.push(Control { id, hwnd, page });
+            self.controls.push(Control {
+                id,
+                hwnd,
+                page,
+                clip: Cell::new(None),
+            });
         }
         Ok(())
     }
 
     fn make_font(&mut self) {
-        if self.owned_font {
-            unsafe {
-                let _ = DeleteObject(self.font.into());
-            }
-        }
+        let previous = (self.font, self.owned_font, self.section_font);
         let mut metrics = NONCLIENTMETRICSW {
             cbSize: size_of::<NONCLIENTMETRICSW>() as u32,
             ..Default::default()
@@ -887,6 +895,10 @@ impl Shell {
                 (f64::from(metrics.lfMessageFont.lfHeight) * self.scale * 96.0
                     / f64::from(system_dpi))
                 .round() as i32;
+            let minimum = (14.0 * self.scale).round() as i32;
+            if metrics.lfMessageFont.lfHeight.abs() < minimum {
+                metrics.lfMessageFont.lfHeight = -minimum;
+            }
             self.row = ((metrics.lfMessageFont.lfHeight.abs() as f64 / self.scale).ceil() as i32
                 + 12)
                 .max(30);
@@ -898,12 +910,55 @@ impl Shell {
         if !self.owned_font {
             self.font = HFONT(unsafe { GetStockObject(DEFAULT_GUI_FONT) }.0);
         }
+        self.section_font = if available {
+            metrics.lfMessageFont.lfWeight = metrics.lfMessageFont.lfWeight.max(600);
+            unsafe { CreateFontIndirectW(&metrics.lfMessageFont) }
+        } else {
+            HFONT::default()
+        };
+        if self.section_font.is_invalid() {
+            self.section_font = self.font;
+        }
+        self.apply_fonts();
+        unsafe {
+            if previous.2 != previous.0 && !previous.2.is_invalid() {
+                let _ = DeleteObject(previous.2.into());
+            }
+            if previous.1 {
+                let _ = DeleteObject(previous.0.into());
+            }
+        }
+    }
+
+    fn control_font(&self, id: i32) -> HFONT {
+        let selected_page = match self.page {
+            PAGE_SETTINGS => ID_PAGE_SETTINGS,
+            PAGE_ASSOCIATE => ID_PAGE_ASSOCIATE,
+            _ => ID_PAGE_MAIN,
+        };
+        if id == selected_page
+            || matches!(
+                id,
+                ID_WINDOWS_LABEL
+                    | ID_PRESETS_LABEL
+                    | ID_EDITOR_HEADING
+                    | ID_CONFIG_LABEL
+                    | ID_RESULT_LABEL
+            )
+        {
+            self.section_font
+        } else {
+            self.font
+        }
+    }
+
+    fn apply_fonts(&self) {
         for control in &self.controls {
             unsafe {
                 SendMessageW(
                     control.hwnd,
                     WM_SETFONT,
-                    Some(WPARAM(self.font.0 as usize)),
+                    Some(WPARAM(self.control_font(control.id).0 as usize)),
                     Some(LPARAM(1)),
                 );
             }
@@ -2218,6 +2273,7 @@ impl Shell {
                 } else {
                     PAGE_ASSOCIATE
                 };
+                self.apply_fonts();
                 self.scroll = 0;
                 self.layout();
                 Ok(())
@@ -2457,7 +2513,8 @@ impl Shell {
             WM_GETMINMAXINFO if hwnd == self.window && lp.0 != 0 => {
                 let info = unsafe { &mut *(lp.0 as *mut MINMAXINFO) };
                 info.ptMinTrackSize.x = (720.0 * self.scale) as i32;
-                info.ptMinTrackSize.y = (440.0 * self.scale) as i32;
+                info.ptMinTrackSize.y =
+                    (f64::from((self.row * 10 + 140).max(440)) * self.scale) as i32;
                 Some(LRESULT(0))
             }
             WM_DPICHANGED if hwnd == self.window => {
@@ -2559,7 +2616,7 @@ impl Shell {
 
     fn ensure_focus_visible(&mut self) {
         let focus = unsafe { GetFocus() };
-        if !self.controls.iter().any(|c| c.hwnd == focus) {
+        if !self.controls.iter().any(|c| c.hwnd == focus && c.page != 0) {
             return;
         }
         let mut rect = RECT::default();
@@ -2575,10 +2632,12 @@ impl Shell {
         }
         let top = rect.top - origin.y;
         let bottom = rect.bottom - origin.y;
-        let delta = if top < 0 {
-            (top as f64 / self.scale).floor() as i32 - 8
-        } else if bottom > client.bottom {
-            ((bottom - client.bottom) as f64 / self.scale).ceil() as i32 + 8
+        let visible_top = (f64::from(self.content_top) * self.scale).round() as i32;
+        let visible_bottom = (f64::from(self.content_bottom) * self.scale).round() as i32;
+        let delta = if top < visible_top || bottom - top > visible_bottom - visible_top {
+            (f64::from(top - visible_top) / self.scale).floor() as i32 - 8
+        } else if bottom > visible_bottom {
+            (f64::from(bottom - visible_bottom) / self.scale).ceil() as i32 + 8
         } else {
             0
         };
@@ -2621,17 +2680,28 @@ impl Shell {
         } else {
             row + 24 + row * 18 + 72
         };
-        let bottom = end + row * 5 + 24;
-        self.content_height = bottom;
-        self.scroll = self.scroll.clamp(0, (bottom - height).max(0));
+        let compact_feedback = height < 600;
+        let feedback_height = if compact_feedback {
+            row * 3 + 28
+        } else {
+            row * 4 + 36
+        };
+        let footer_top = (height - feedback_height).max(row + 24);
+        self.content_top = row + 24;
+        self.content_bottom = (footer_top - 12).max(self.content_top + 1);
+        let visible_height = self.content_bottom - self.content_top;
+        self.content_height = (end - self.content_top).max(1);
+        self.scroll = self
+            .scroll
+            .clamp(0, (self.content_height - visible_height).max(0));
         let info = SCROLLINFO {
             cbSize: size_of::<SCROLLINFO>() as u32,
             // Retain the scrollbar width when no scrolling is required. Hiding
             // it here would synchronously resize the client during this layout.
             fMask: SIF_RANGE | SIF_PAGE | SIF_POS | SIF_DISABLENOSCROLL,
             nMin: 0,
-            nMax: bottom - 1,
-            nPage: height.max(0) as u32,
+            nMax: self.content_height - 1,
+            nPage: visible_height as u32,
             nPos: self.scroll,
             ..Default::default()
         };
@@ -2890,21 +2960,80 @@ impl Shell {
             self.place(ID_ASSOC_HELP, margin, y + row * 15 + 56, width, row * 2);
             self.place(ID_CREATE_ENVIRONMENT, margin, y + row * 17 + 64, 280, row);
         }
-        self.place(ID_UNDO, margin, end, width, row);
-        self.place(ID_RESULT_LABEL, margin, end + row + 8, width, row);
-        self.place(ID_RESULT, margin, end + row * 2 + 8, width, row * 3);
+        self.place(ID_UNDO, margin, footer_top + 8, width, row);
+        if compact_feedback {
+            let label_width = (row * 3).min(width / 3);
+            self.place(
+                ID_RESULT_LABEL,
+                margin,
+                footer_top + row + 12,
+                label_width,
+                row,
+            );
+            self.place(
+                ID_RESULT,
+                margin + label_width + gap,
+                footer_top + row + 12,
+                width - label_width - gap,
+                row * 2,
+            );
+        } else {
+            self.place(ID_RESULT_LABEL, margin, footer_top + row + 12, width, row);
+            self.place(ID_RESULT, margin, footer_top + row * 2 + 12, width, row * 2);
+        }
     }
     fn place(&self, id: i32, x: i32, y: i32, width: i32, height: i32) {
+        let Some(control) = self.controls.iter().find(|c| c.id == id) else {
+            return;
+        };
+        let y = y - if control.page == 0 { 0 } else { self.scroll };
+        let physical_y = (f64::from(y) * self.scale).round() as i32;
+        let physical_width = (f64::from(width.max(1)) * self.scale).round() as i32;
+        let physical_height = (f64::from(height.max(1)) * self.scale).round() as i32;
         unsafe {
             let _ = SetWindowPos(
-                self.hwnd(id),
+                control.hwnd,
                 None,
                 (x as f64 * self.scale).round() as i32,
-                ((y - self.scroll) as f64 * self.scale).round() as i32,
-                (width.max(1) as f64 * self.scale).round() as i32,
-                (height.max(1) as f64 * self.scale).round() as i32,
-                SWP_NOZORDER | SWP_NOACTIVATE,
+                physical_y,
+                physical_width,
+                physical_height,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS,
             );
+        }
+        let viewport_top = (f64::from(self.content_top) * self.scale).round() as i32;
+        let viewport_bottom = (f64::from(self.content_bottom) * self.scale).round() as i32;
+        let clip = if control.page == 0
+            || (physical_y >= viewport_top && physical_y + physical_height <= viewport_bottom)
+        {
+            None
+        } else {
+            let top = (viewport_top - physical_y).clamp(0, physical_height);
+            let bottom = (viewport_bottom - physical_y).clamp(0, physical_height);
+            Some(if bottom <= top {
+                [0, 0, 0, 0]
+            } else {
+                [0, top, physical_width, bottom]
+            })
+        };
+        if clip == control.clip.get() {
+            return;
+        }
+        unsafe {
+            if let Some([left, top, right, bottom]) = clip {
+                let region = CreateRectRgn(left, top, right, bottom);
+                if !region.is_invalid() {
+                    if SetWindowRgn(control.hwnd, Some(region), true) != 0 {
+                        // Ownership transfers to Windows, which releases the
+                        // previous region and the final region on destruction.
+                        control.clip.set(clip);
+                    } else {
+                        let _ = DeleteObject(region.into());
+                    }
+                }
+            } else if SetWindowRgn(control.hwnd, None, true) != 0 {
+                control.clip.set(None);
+            }
         }
     }
 }
@@ -2921,6 +3050,9 @@ impl Drop for Shell {
         let icon = self.tray_data();
         unsafe {
             let _ = Shell_NotifyIconW(NIM_DELETE, &icon);
+            if self.section_font != self.font && !self.section_font.is_invalid() {
+                let _ = DeleteObject(self.section_font.into());
+            }
             if self.owned_font {
                 let _ = DeleteObject(self.font.into());
             }
@@ -3084,9 +3216,12 @@ mod tests {
                 page: 1,
                 scroll: 0,
                 content_height: 0,
+                content_top: 0,
+                content_bottom: 0,
                 scale: 1.0,
                 row: 30,
                 font: HFONT::default(),
+                section_font: HFONT::default(),
                 owned_font: false,
                 association: HashMap::new(),
                 association_profile: None,

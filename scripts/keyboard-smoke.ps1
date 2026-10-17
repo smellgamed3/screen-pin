@@ -77,12 +77,30 @@ public static class PinKeyboard {
  public static void Press(ushort key,ushort modifier){AssertUI();if((GetAsyncKeyState(key)&0x8000)!=0||(modifier!=0&&(GetAsyncKeyState(modifier)&0x8000)!=0))throw new Exception("A test key is already held; input cancelled");var inputs=new List<Input>();if(modifier!=0)inputs.Add(KeyInput(modifier,false,false));inputs.Add(KeyInput(key,false,false));inputs.Add(KeyInput(key,true,false));if(modifier!=0)inputs.Add(KeyInput(modifier,true,false));Send(inputs.ToArray());}
  public static void Type(string value){AssertUI();foreach(char c in value){AssertUI();Send(new[]{KeyInput(c,false,true),KeyInput(c,true,true)});}}
  public static int FocusId(){uint owner;var thread=GetWindowThreadProcessId(UI,out owner);var info=new GuiInfo{size=(uint)Marshal.SizeOf(typeof(GuiInfo))};if(!GetGUIThreadInfo(thread,ref info))throw new Exception("Cannot inspect own UI focus");return GetDlgCtrlID(info.focus);}
- public static bool FocusFullyVisible(){var control=GetDlgItem(UI,FocusId());Rect child,client;if(control==IntPtr.Zero||!GetWindowRect(control,out child)||!GetClientRect(UI,out client))return false;MapWindowPoints(UI,IntPtr.Zero,ref client,2);return child.Left>=client.Left&&child.Top>=client.Top&&child.Right<=client.Right&&child.Bottom<=client.Bottom;}
+ [DllImport("user32.dll")] private static extern int GetWindowRgn(IntPtr h,IntPtr region);
+ [DllImport("gdi32.dll")] private static extern IntPtr CreateRectRgn(int a,int b,int c,int d);
+ [DllImport("gdi32.dll")] private static extern int GetRgnBox(IntPtr region,out Rect box);
+ [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr h);
+ public static bool FocusFullyVisible(){
+  var previous=SetThreadDpiAwarenessContext(new IntPtr(-4));
+  try{
+   int id=FocusId();var control=GetDlgItem(UI,id);Rect child,client;
+   if(control==IntPtr.Zero||!GetWindowRect(control,out child)||!GetClientRect(UI,out client))return false;
+   MapWindowPoints(UI,IntPtr.Zero,ref client,2);
+   if(child.Left<client.Left||child.Top<client.Top||child.Right>client.Right||child.Bottom>client.Bottom)return false;
+   if(id!=100&&id!=101&&id!=102&&id!=136&&id!=138){
+    Rect nav,undo;if(!GetWindowRect(GetDlgItem(UI,100),out nav)||!GetWindowRect(GetDlgItem(UI,136),out undo)||child.Top<nav.Bottom||child.Bottom>undo.Top)return false;
+   }
+   var region=CreateRectRgn(0,0,0,0);if(region==IntPtr.Zero)return false;
+   try{int type=GetWindowRgn(control,region);if(type==0)return true;Rect box;GetRgnBox(region,out box);return type!=1&&box.Left<=0&&box.Top<=0&&box.Right>=child.Right-child.Left&&box.Bottom>=child.Bottom-child.Top;}
+   finally{DeleteObject(region);}
+  }finally{SetThreadDpiAwarenessContext(previous);}
+ }
  public static string Text(int id){var text=new StringBuilder(32768);SendMessageW(GetDlgItem(UI,id),0x0d,new IntPtr(text.Capacity),text);return text.ToString();}
  public static int FindListIndex(int id,string value){var list=GetDlgItem(UI,id);for(int i=0;i<10000;i++){var text=new StringBuilder(32768);var length=SendMessageW(list,0x189,new IntPtr(i),text).ToInt64();if(length<0)return -1;if(text.ToString().Contains(value))return i;}return -1;}
 }
 '@
-$report = [ordered]@{executed=[DateTimeOffset]::Now.ToString('o');executable=$ExePath;exe_sha256=(Get-FileHash -LiteralPath $ExePath).Hash;configuration=$configDir;input_method='Initial public UIA focus action when needed; subsequent application actions use SendInput Tab, Shift+Tab, Space, arrow keys and Unicode text.';passed_checks=@();uia=@();tab_focus=@();errors=@();normal_exit=$false;passed=$false;limitations=@('Single desktop at current DPI; UIA names are structural evidence, not a Narrator listening test.','Tray keyboard-only exit and migration/deletion confirmation are not covered.','Fixture creation and cleanup use APIs; application actions use keyboard input.')}
+$report = [ordered]@{script_sha256=(Get-FileHash -LiteralPath $PSCommandPath).Hash;focus_visibility_scope='Client bounds, fixed navigation/feedback and native control region; actual Tab and Shift+Tab.';executed=[DateTimeOffset]::Now.ToString('o');executable=$ExePath;exe_sha256=(Get-FileHash -LiteralPath $ExePath).Hash;configuration=$configDir;input_method='Initial public UIA focus action when needed; subsequent application actions use SendInput Tab, Shift+Tab, Space, arrow keys and Unicode text.';passed_checks=@();uia=@();tab_focus=@();errors=@();normal_exit=$false;passed=$false;limitations=@('Single desktop at current DPI; UIA names are structural evidence, not a Narrator listening test.','Tray keyboard-only exit and migration/deletion confirmation are not covered.','Fixture creation and cleanup use APIs; application actions use keyboard input.')}
 $process=$null;$hostWindow=[IntPtr]::Zero
 $startupBefore=[Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run','ScreenPin',$null)
 function Assert-Keyboard($condition,[string]$message){if(-not $condition){throw $message};$report.passed_checks+= $message}
