@@ -74,6 +74,27 @@ public static class PinApplicationInput {
         uint flags=8u | (up ? 2u : 0u) | ((scan>>8)==0xe0 ? 1u : 0u);
         return new Input { type=1, data=new Data { key=new Key { scan=(ushort)(scan&0xff), flags=flags } } };
     }
+    public static void Text(IntPtr h, uint expected, IntPtr root, uint rootExpected, string text) {
+        if (String.IsNullOrEmpty(text) || text.Length > 2048 || text.IndexOfAny(new[] {'\r', '\n', '\0'}) >= 0)
+            throw new ArgumentException("Expected one bounded path without control characters");
+        for (int offset=0; offset<text.Length; offset+=16) {
+            AssertForeground(h, expected, root, rootExpected);
+            foreach (int code in new[] {0x11,0x12,0x10,0x5b,0x5c})
+                if ((GetAsyncKeyState(code)&0x8000)!=0) throw new InvalidOperationException("Modifier held during path entry; input cancelled");
+            var input=new List<Input>();var releases=new List<Input>();
+            for (int i=offset; i<Math.Min(offset+16,text.Length); i++) {
+                var down=new Input{type=1,data=new Data{key=new Key{scan=text[i],flags=4u}}};
+                var up=new Input{type=1,data=new Data{key=new Key{scan=text[i],flags=6u}}};
+                input.Add(down);input.Add(up);releases.Add(up);
+            }
+            var events=input.ToArray();
+            if (SendInput((uint)events.Length,events,Marshal.SizeOf(typeof(Input)))!=events.Length) {
+                var cleanup=releases.ToArray();SendInput((uint)cleanup.Length,cleanup,Marshal.SizeOf(typeof(Input)));
+                throw new InvalidOperationException("Path entry was incomplete; injected Unicode keys released");
+            }
+            AssertForeground(h, expected, root, rootExpected);
+        }
+    }
     public static void Chord(IntPtr h, uint expected, IntPtr root, uint rootExpected, ushort key, uint modifiers, bool allowDialogAfter) {
         AssertForeground(h, expected, root, rootExpected);
         if ((modifiers & ~3u) != 0) throw new ArgumentException("Only Ctrl/Alt test modifiers are supported");

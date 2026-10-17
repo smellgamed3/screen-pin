@@ -8,6 +8,7 @@ param(
     [switch]$TemporaryDialogs,
     [switch]$Fullscreen,
     [switch]$HotkeyStates,
+    [switch]$TitleRules,
     [ValidateRange(1,100)][int]$HotkeyCycles=50,
     [ValidateRange(0,100)][int]$PrecisionCycles=0
 )
@@ -20,7 +21,8 @@ $configDir = (New-Item -ItemType Directory -Path (Join-Path $OutputDir ('config-
 $unique = [Guid]::NewGuid().ToString('N')
 $startupBefore = [Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run','ScreenPin',$null)
 Add-Type -Path (Join-Path $PSScriptRoot 'support/application-native.cs')
-if($TemporaryDialogs -or $Fullscreen -or $HotkeyStates){Add-Type -Path (Join-Path $PSScriptRoot 'support/application-input.cs')}
+if($TemporaryDialogs -or $Fullscreen -or $HotkeyStates -or $TitleRules){Add-Type -Path (Join-Path $PSScriptRoot 'support/application-input.cs')}
+if($TitleRules){Add-Type -Path (Join-Path $PSScriptRoot 'support/real-keys.cs')}
 $previousDpi = [PinApplication]::SetThreadDpiAwarenessContext([IntPtr](-4))
 $process = $null
 $ui = [IntPtr]::Zero
@@ -196,7 +198,7 @@ function Remember-HotApplication($run){
     Keys-Application $run $run.handle 0x79 3
     Wait-HotApplication $run { (Get-Content -LiteralPath $path -Raw|ConvertFrom-Json).revision -gt $before -and (Read-Control ([PinApplication]::GetDlgItem($ui,138))) -match '^已记住' } 'changed F10 persistence'
 }
-function Restore-HotApplication($run,$expected,[string]$scenario){
+function Restore-HotApplication($run,$expected,[string]$scenario,[string]$scope='应用默认'){
     Confirm-ApplicationOwner $run|Out-Null
     $path=Join-Path $configDir 'config.json';$hash=(Get-FileHash -LiteralPath $path).Hash
     # Refresh completes through an owned GUI command before timing, so feedback
@@ -210,7 +212,7 @@ function Restore-HotApplication($run,$expected,[string]$scenario){
     Wait-HotApplication $run { (Bounds-Error (Bounds-Application $run.handle) $expected) -le 2 -and (Read-Control ([PinApplication]::GetDlgItem($ui,138))) -match '^已恢复|^已符合预设' } $scenario
     $elapsed=$watch.Elapsed.TotalMilliseconds
     $actual=Bounds-Application $run.handle;$status=Read-Control ([PinApplication]::GetDlgItem($ui,138))
-    Assert-State ($status.Contains('应用默认') -and (Get-FileHash -LiteralPath $path).Hash -eq $hash) ($scenario+': actual F9 uses the default without writing')
+    Assert-State ($status.Contains($scope) -and (Get-FileHash -LiteralPath $path).Hash -eq $hash) ($scenario+': actual F9 uses '+$scope+' without writing')
     return @{scenario=$scenario;before=$before;expected=$expected;actual=$actual;edge_error_px=Bounds-Error $actual $expected;completion_ms=$elapsed;foreground_preserved=$true;config_unchanged=$true;feedback=$status}
 }
 function HotkeyStates-Application($run){
@@ -253,6 +255,85 @@ function HotkeyStates-Application($run){
     $sorted=@($ordinary.completion_ms|Sort-Object);$p95=$sorted[[Math]::Ceiling($sorted.Count*0.95)-1]
     Assert-State ($ordinary.Count -eq $HotkeyCycles -and $p95 -le 300) 'Requested actual ordinary restore samples complete within the p95 300 ms budget'
     return @{status='Passed';checks=$stateChecks.ToArray();restores=$samples;ordinary_cycles=$ordinary.Count;ordinary_completion_p95_ms=$p95;max_edge_error_px=($samples.edge_error_px|Measure-Object -Maximum).Maximum;manual_normal_edge_error_px=$manualError;input_method='Real foreground-checked SendInput Ctrl+Alt+F10/F9; native state transitions and displacement; GUI refresh clears stale feedback before each actual restore.';latency_definition='Stopwatch before the validated key wrapper until both visible DWM bounds and new explicit success feedback match; includes process ownership validation and 10 ms polling overhead, not an isolated Win32 dispatch duration.'}
+}
+function App-TitleApplication($run){
+    $config=Get-Content -LiteralPath (Join-Path $configDir 'config.json') -Raw|ConvertFrom-Json
+    $apps=@($config.profiles[0].applications|Where-Object {$_.app_id.EndsWith($run.executable.ToLowerInvariant())})
+    if($apps.Count -ne 1){throw 'Expected one owned title-rule application'}
+    return $apps[0]
+}
+function Match-ApplicationTitle([string]$caption,[string]$variant){
+    $alpha=$caption -match 'RuleAlpha';$beta=$caption -match 'RuleBeta'
+    switch($variant){'Default'{return -not $alpha -and -not $beta};'RuleAlpha'{return $alpha -and -not $beta};'RuleBeta'{return $beta -and -not $alpha};'RuleAlpha RuleBeta'{return $alpha -and $beta}}
+    throw 'Unexpected title variant'
+}
+function Set-ApplicationTitle($run,[string]$variant){
+    Confirm-ApplicationOwner $run|Out-Null
+    $before=Window-Title $run.handle;$path=$run.rule_documents[$variant]
+    if(-not $path -or -not (Test-Path -LiteralPath $path)){throw 'Title navigation must use an existing owned test document'}
+    $key=if($run.name -eq 'Brave'){0x4c}else{0x50}
+    $text=if($run.name -eq 'Brave'){[Uri]::new($path).AbsoluteUri}else{$path}
+    Keys-Application $run $run.handle $key 1
+    Start-Sleep -Milliseconds 180
+    Keys-Application $run $run.handle 0x41 1
+    Confirm-ApplicationOwner $run|Out-Null
+    [PinApplicationInput]::Text($run.handle,$run.pid,$run.handle,$run.pid,$text)
+    Start-Sleep -Milliseconds 300
+    Keys-Application $run $run.handle 0x0d
+    Wait-HotApplication $run {(Window-Title $run.handle).Contains($run.title) -and (Match-ApplicationTitle (Window-Title $run.handle) $variant)} 'actual owned document navigation/title change'
+    Confirm-ApplicationOwner $run|Out-Null
+    return @{variant=$variant;document=$path;before=$before;after=Window-Title $run.handle;hwnd=$run.handle.ToInt64()}
+}
+function Move-TitleApplication($run,[int]$x,[int]$y,[int]$width,[int]$height){
+    Confirm-ApplicationOwner $run|Out-Null
+    [PinApplicationInput]::AssertForeground($run.handle,$run.pid,$run.handle,$run.pid)
+    if(-not [PinApplication]::SetWindowPos($run.handle,[IntPtr]::Zero,$x,$y,$width,$height,0x4014)){throw 'Owned title-case displacement failed'}
+    Start-Sleep -Milliseconds 180
+    [PinApplicationInput]::AssertForeground($run.handle,$run.pid,$run.handle,$run.pid)
+    return Bounds-Application $run.handle
+}
+function TitleRules-Application($run){
+    $script:stateChecks=[Collections.Generic.List[string]]::new();$titles=@();$restores=@()
+    Focus-Application $run
+    $defaultFrame=Bounds-Application $run.handle;$defaultBefore=(App-TitleApplication $run).default|ConvertTo-Json -Depth 16 -Compress
+    $run.rule_documents['Default']=$run.document
+    foreach($variant in @('RuleAlpha','RuleBeta','RuleAlpha RuleBeta')){
+        $extension=if($run.name -eq 'Brave'){'.html'}else{'.txt'}
+        $path=Join-Path $OutputDir ($run.title+' '+$variant+$extension)
+        $content=if($run.name -eq 'Brave'){'<!doctype html><meta charset="utf-8"><title>'+$run.title+' '+$variant+'</title><p>Owned title-rule document.</p>'}else{'Owned title-rule document. No user content.'}
+        [IO.File]::WriteAllText($path,$content);$run.rule_documents[$variant]=$path
+    }
+    foreach($case in @(@{variant='RuleAlpha';keyword='rUlEaLpHa';x=300;y=210;width=1060;height=730},@{variant='RuleBeta';keyword='RuleBeta';x=450;y=300;width=1000;height=640})){
+        $titles+=Set-ApplicationTitle $run $case.variant
+        $frame=Move-TitleApplication $run $case.x $case.y $case.width $case.height
+        if($case.variant -eq 'RuleAlpha'){$alphaFrame=$frame}else{$betaFrame=$frame}
+        Click-Control 109;Select-Target $run.title
+        [PinRealKeys]::ControlText($ui,$process.Id,114,$case.keyword);Click-Control 115
+        if((Read-Control ([PinApplication]::GetDlgItem($ui,138))) -notmatch '^已创建标题规则'){throw 'Owned title-rule capture failed'}
+    }
+    $app=App-TitleApplication $run
+    Assert-State ($app.rules.Count -eq 2 -and $app.rules[0].keyword -ceq 'rUlEaLpHa' -and ($app.default|ConvertTo-Json -Depth 16 -Compress) -ceq $defaultBefore) 'Two title rules preserve the shared default and explicit creation order'
+    $original=($app|ConvertTo-Json -Depth 24)|ConvertFrom-Json
+    foreach($case in @(@{variant='RuleAlpha';expected=$alphaFrame;scope='rUlEaLpHa'},@{variant='RuleBeta';expected=$betaFrame;scope='RuleBeta'},@{variant='RuleAlpha RuleBeta';expected=$alphaFrame;scope='rUlEaLpHa'},@{variant='Default';expected=$defaultFrame;scope='应用默认'})){
+        $titles+=Set-ApplicationTitle $run $case.variant
+        $null=Move-TitleApplication $run 800 500 820 580
+        $restores+=Restore-HotApplication $run $case.expected ('title-'+$case.variant) $case.scope
+    }
+    $titles+=Set-ApplicationTitle $run 'RuleBeta';$updatedBeta=Move-TitleApplication $run 620 370 950 620
+    Remember-HotApplication $run;$app=App-TitleApplication $run;$status=Read-Control ([PinApplication]::GetDlgItem($ui,138))
+    Assert-State ($status.Contains('RuleBeta') -and $app.rules[1].preset.id -eq $original.rules[1].preset.id -and ($app.rules[0]|ConvertTo-Json -Depth 16 -Compress) -ceq ($original.rules[0]|ConvertTo-Json -Depth 16 -Compress) -and ($app.default|ConvertTo-Json -Depth 16 -Compress) -ceq $defaultBefore) 'Actual Beta F10 changes only its existing rule, preserving Alpha and the shared default'
+    $null=Move-TitleApplication $run 800 500 820 580;$restores+=Restore-HotApplication $run $updatedBeta 'updated-Beta' 'RuleBeta'
+    $betaBeforeOverlap=$app.rules[1]|ConvertTo-Json -Depth 16 -Compress
+    $titles+=Set-ApplicationTitle $run 'RuleAlpha RuleBeta';$updatedAlpha=Move-TitleApplication $run 610 280 1040 680
+    Remember-HotApplication $run;$app=App-TitleApplication $run;$status=Read-Control ([PinApplication]::GetDlgItem($ui,138))
+    Assert-State ($status.Contains('rUlEaLpHa') -and $app.rules[0].preset.id -eq $original.rules[0].preset.id -and ($app.rules[1]|ConvertTo-Json -Depth 16 -Compress) -ceq $betaBeforeOverlap -and ($app.default|ConvertTo-Json -Depth 16 -Compress) -ceq $defaultBefore) 'Actual dual-match F10 updates the same first rule chosen by F9, preserving Beta and the shared default'
+    $null=Move-TitleApplication $run 800 500 820 580;$restores+=Restore-HotApplication $run $updatedAlpha 'updated-overlap-first' 'rUlEaLpHa'
+    $savedRules=$app.rules|ConvertTo-Json -Depth 20 -Compress
+    $titles+=Set-ApplicationTitle $run 'Default';$updatedDefault=Move-TitleApplication $run 560 310 1020 700
+    Remember-HotApplication $run;$app=App-TitleApplication $run;$status=Read-Control ([PinApplication]::GetDlgItem($ui,138))
+    Assert-State ($status.Contains('应用默认') -and $app.default.id -eq $original.default.id -and ($app.rules|ConvertTo-Json -Depth 20 -Compress) -ceq $savedRules) 'Actual fallback F10 changes only the shared default and preserves both title rules'
+    $null=Move-TitleApplication $run 800 500 820 580;$restores+=Restore-HotApplication $run $updatedDefault 'updated-default' '应用默认'
+    return @{status='Passed';checks=$stateChecks.ToArray();titles=$titles;restores=$restores;before=$original;after=$app;input_method='Owned real Ctrl+L / Ctrl+P, Unicode path entry and Enter open actual local documents in the same window; rules are created through owned GUI controls; restore/update use real foreground-checked Ctrl+Alt+F9/F10.'}
 }
 function Dialog-Application($run){
     $script:stateChecks=[Collections.Generic.List[string]]::new()
@@ -316,7 +397,7 @@ function Fullscreen-Application($run){
     return @{status='Passed';checks=$stateChecks.ToArray();is_zoomed_while_fullscreen=$isZoomed;input_method='Owned foreground real F11 fullscreen toggle and Ctrl+Alt+F10/F9.'}
 }
 try {
-    if($TemporaryDialogs -or $Fullscreen -or $HotkeyStates){
+    if($TemporaryDialogs -or $Fullscreen -or $HotkeyStates -or $TitleRules){
         $script:existingInputHost=$false
         [PinApplication]::EnumWindows({param($handle,$data) $class=[Text.StringBuilder]::new(128);[PinApplication]::GetClassNameW($handle,$class,128)|Out-Null;if($class.ToString() -eq 'ScreenPin.Host'){$script:existingInputHost=$true};return $true},[IntPtr]::Zero)|Out-Null
         if($script:existingInputHost){throw 'Existing Screen Pin instance detected; real application input is cancelled before launch'}
@@ -330,7 +411,7 @@ try {
         },[IntPtr]::Zero)|Out-Null
         $ui -ne [IntPtr]::Zero -and (Read-Control ([PinApplication]::GetDlgItem($ui,138))) -notin @('','正在处理…')
     } 'Screen Pin initial refresh'
-    if($TemporaryDialogs -or $Fullscreen -or $HotkeyStates){$status=Read-Control ([PinApplication]::GetDlgItem($ui,208));if(([regex]::Matches($status,'已注册')).Count -ne 2 -or $status -match '不可用'){throw 'Owned Screen Pin does not have both hotkeys registered; no application input sent'}}
+    if($TemporaryDialogs -or $Fullscreen -or $HotkeyStates -or $TitleRules){$status=Read-Control ([PinApplication]::GetDlgItem($ui,208));if(([regex]::Matches($status,'已注册')).Count -ne 2 -or $status -match '不可用'){throw 'Owned Screen Pin does not have both hotkeys registered; no application input sent'}}
     foreach($spec in @(@{name='Brave';path=$BravePath},@{name='VSCode';path=$CodePath})) {
         $script:dialogTrace=@()
         $result=[ordered]@{application=$spec.name;status='Skipped';reason='';checks=@()}
@@ -357,7 +438,7 @@ try {
                 $arguments=@(('--user-data-dir="'+$profile+'"'),('--extensions-dir="'+$extensions+'"'),'--disable-extensions','--skip-welcome','--skip-release-notes','--new-window',('"'+$document+'"'))
             }
             $launched=Start-Process -FilePath $executable.FullName -ArgumentList $arguments -WindowStyle Hidden -PassThru
-            $run=[pscustomobject]@{name=$spec.name;executable=$executable.FullName;profile=$profile;title=$title;handle=[IntPtr]::Zero;pid=0;launcher=$launched}
+            $run=[pscustomobject]@{name=$spec.name;executable=$executable.FullName;profile=$profile;title=$title;handle=[IntPtr]::Zero;pid=0;launcher=$launched;document=$document;rule_documents=@{}}
             $runs.Add($run)
             $script:isolatedWindow=[IntPtr]::Zero
             $script:isolatedPid=0
@@ -414,12 +495,13 @@ try {
             if($PrecisionCycles){$result['precision']=Precision-Application $run}
             if($ExtendedStates){$result['extended_states']=States-Application $run}
             if($HotkeyStates){$result['hotkey_states']=HotkeyStates-Application $run}
+            if($TitleRules){$result['title_rules']=TitleRules-Application $run}
             if($TemporaryDialogs){$result['temporary_dialog']=Dialog-Application $run}
             if($Fullscreen){$result['fullscreen']=Fullscreen-Application $run}
         } catch {
             $result.status='Failed';$result.reason=$_.Exception.Message
-            if($TemporaryDialogs -or $Fullscreen -or $HotkeyStates){$script:inputCancelled=$true}
-            if(($TemporaryDialogs -or $Fullscreen -or $HotkeyStates) -and $run -and $run.pid){
+            if($TemporaryDialogs -or $Fullscreen -or $HotkeyStates -or $TitleRules){$script:inputCancelled=$true}
+            if(($TemporaryDialogs -or $Fullscreen -or $HotkeyStates -or $TitleRules) -and $run -and $run.pid){
                 $result['input_diagnostics']=[PinApplicationInput]::Snapshot($run.pid)
                 if($dialogTrace){$result['dialog_trace']=$dialogTrace}
                 try{
@@ -469,9 +551,11 @@ if($ExtendedStates){$report.limitations=@('one physical display/current DPI; def
 $report['temporary_dialog_requested']=$TemporaryDialogs.IsPresent
 $report['fullscreen_requested']=$Fullscreen.IsPresent
 $report['hotkey_states_requested']=$HotkeyStates.IsPresent
+$report['title_rules_requested']=$TitleRules.IsPresent
+if($TitleRules){$report['controls_helper_sha256']=(Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'support/real-keys.cs')).Hash}
 $report['hotkey_cycles_requested']=if($HotkeyStates){$HotkeyCycles}else{0}
 $report['input_cancelled']=$inputCancelled
-if($TemporaryDialogs -or $Fullscreen -or $HotkeyStates){$report['input_helper_sha256']=(Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'support/application-input.cs')).Hash;$report.limitations=@('one physical display/current DPI and default taskbar configuration only','only the requested GUI and real hotkey state/dialog/fullscreen cases; no elevated app tested','Ctrl+O requests the owned common file dialog; no file is selected','input is checked against owned foreground/class/PID immediately before and after; observed user switching cancels later input','machine has development tools; does not prove clean-machine deployment')}
+if($TemporaryDialogs -or $Fullscreen -or $HotkeyStates -or $TitleRules){$report['input_helper_sha256']=(Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'support/application-input.cs')).Hash;$report.limitations=@('one physical display/current DPI and default taskbar configuration only','only the requested GUI and real hotkey state/dialog/fullscreen cases; no elevated app tested','Ctrl+O requests the owned common file dialog; no file is selected','input is checked against owned foreground/class/PID immediately before and after; observed user switching cancels later input','machine has development tools; does not prove clean-machine deployment')}
 $report['passed']=$results.Count -eq 2 -and @($results|Where-Object {$_.status -ne 'Passed'}).Count -eq 0 -and $report.screen_pin_exited -and $report.hkcu_startup_unchanged -and $remaining.Count -eq 0
 $report|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $OutputDir 'application-smoke.json') -Encoding utf8
 $report|ConvertTo-Json -Depth 12
