@@ -1098,7 +1098,12 @@ impl Shell {
     }
 
     fn restore_operation_focus(&mut self) {
-        let Some(previous) = self.operation_focus.take() else {
+        let previous = self.operation_focus.take();
+        self.restore_control_focus(previous);
+    }
+
+    fn restore_control_focus(&mut self, previous: Option<HWND>) {
+        let Some(previous) = previous else {
             return;
         };
         unsafe {
@@ -1120,6 +1125,25 @@ impl Shell {
             let _ = SetFocus(Some(target));
         }
         self.ensure_focus_visible();
+    }
+
+    fn confirm(&mut self, description: &str, title: &str, style: MESSAGEBOX_STYLE) -> bool {
+        let previous = (unsafe { GetForegroundWindow() } == self.window)
+            .then(|| unsafe { GetFocus() })
+            .filter(|focus| self.controls.iter().any(|control| control.hwnd == *focus));
+        let result = unsafe {
+            MessageBoxW(
+                Some(self.window),
+                PCWSTR(wide(description).as_ptr()),
+                PCWSTR(wide(title).as_ptr()),
+                style | MB_YESNO | MB_DEFBUTTON2,
+            )
+        };
+        // Closing a native modal dialog can return focus to the owner itself.
+        // Restore its trigger only while our window still owns the foreground,
+        // preserving any newer selection made in another window or control.
+        self.restore_control_focus(previous);
+        result == IDYES
     }
 
     fn refresh_controls(&mut self) {
@@ -1487,15 +1511,7 @@ impl Shell {
             app.app_id.strip_prefix("exe:").unwrap_or(&app.app_id),
             window.app_id.strip_prefix("exe:").unwrap_or(&window.app_id)
         );
-        let confirm = unsafe {
-            MessageBoxW(
-                Some(self.window),
-                PCWSTR(wide(&description).as_ptr()),
-                w!("迁移应用预设"),
-                MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2,
-            )
-        };
-        if confirm == IDYES {
+        if self.confirm(&description, "迁移应用预设", MB_ICONQUESTION) {
             self.submit(Request::RebindApplication {
                 profile_id: editor.profile_id,
                 old_app_id: editor.app_id,
@@ -2170,33 +2186,21 @@ impl Shell {
                 Ok(())
             }
             ID_RESET_CONFIG => {
-                let confirm = unsafe {
-                    MessageBoxW(
-                        Some(self.window),
-                        w!(
-                            "将保留当前无法读取的配置原件，并为当前显示器新建空配置。原有预设不会自动导入。\n\n确定新建？"
-                        ),
-                        w!("新建配置"),
-                        MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2,
-                    )
-                };
-                if confirm == IDYES {
+                if self.confirm(
+                    "将保留当前无法读取的配置原件，并为当前显示器新建空配置。原有预设不会自动导入。\n\n确定新建？",
+                    "新建配置",
+                    MB_ICONWARNING,
+                ) {
                     self.submit(Request::ResetConfig);
                 }
                 Ok(())
             }
             ID_CREATE_ENVIRONMENT => {
-                let confirm = unsafe {
-                    MessageBoxW(
-                        Some(self.window),
-                        w!(
-                            "将当前连接的显示器视为新环境，并创建空方案。已有方案和预设继续保留。\n\n如果这些是以前用过的屏幕，请优先关联旧方案。继续创建？"
-                        ),
-                        w!("新环境"),
-                        MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2,
-                    )
-                };
-                if confirm == IDYES {
+                if self.confirm(
+                    "将当前连接的显示器视为新环境，并创建空方案。已有方案和预设继续保留。\n\n如果这些是以前用过的屏幕，请优先关联旧方案。继续创建？",
+                    "新环境",
+                    MB_ICONQUESTION,
+                ) {
                     self.submit(Request::CreateEnvironment);
                 }
                 Ok(())

@@ -10,12 +10,14 @@
 
 实现与回归见 [store.rs](../../src/store.rs)。全部 **62 项测试**、格式与严格 Clippy 通过。原子新建保证不覆盖已有目标；本轮不宣称已模拟断电、磁盘写满或所有复制／刷盘失败。
 
-## 当前工件
+## 本阶段工件（历史）
 
 | 文件 | SHA256 |
 | --- | --- |
-| [当前 ZIP](../../dist/ScreenPin-0.1.0-windows-x64.zip) | `F966B1F76A9013DEB058EA254FC815A63C6D06B64E0D7788C1663085366CCA28` |
-| Release EXE／解压 EXE | `46D34B9B649061BE7DEEF6B4EEA8F0E2946275EE53A35100B388AF2E36780EF2` |
+| ZIP 的 [历史校验记录](../../artifacts/packages/package-e248f6e51543408c86d49a3e08c8095e/package-verification.json) | `F966B1F76A9013DEB058EA254FC815A63C6D06B64E0D7788C1663085366CCA28` |
+| [留存解压 EXE](../../artifacts/packages/package-e248f6e51543408c86d49a3e08c8095e/extracted/screen-pin.exe) | `46D34B9B649061BE7DEEF6B4EEA8F0E2946275EE53A35100B388AF2E36780EF2` |
+
+当前发布包已由 [阶段 8](phase-8.md) 的焦点修复构建替代；本文件中的“当前／新构建”均指阶段 6 当时的版本。
 
 仍为 0.1.0 开发预览，Win11 企业版 10.0.26300、普通权限、单屏 2560×1440／工作区 2560×1392、96 DPI。当前 [manifest](../../artifacts/validation/phase-6-embedded.manifest) 为 PerMonitorV2／asInvoker，[导入依赖](../../artifacts/validation/phase-6-dependencies.txt) 仅为系统 DLL；不替代干净机器实测。旧构建证据与待验项保留在 [阶段 5 历史审计](phase-5-coverage.md)，不能当作新 EXE 的执行记录。
 
