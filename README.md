@@ -25,7 +25,7 @@ Windows 11 x64 窗口位置工具：记住应用窗口在指定显示器的位�
 - 对尺寸有特殊限制或无响应的应用，会报告受限或暂未确认，不把偏差自动写成新预设。
 - 配置损坏或格式过新时保护原文件，可从设置明确恢复备份或新建。
 
-当前交付为开发预览；实测范围和未验证项见 [阶段验收记录](docs/validation/phase-3.md) 和 [需求覆盖审计](docs/validation/coverage.md)。多屏、混合 DPI、真实 UAC 和干净环境验证完成前，不能视为最终验收通过。补充硬件与交互验证可按 [实机操作单](docs/validation/manual.md) 执行。
+当前交付为开发预览；实测范围和未验证项见 [阶段验收记录](docs/validation/phase-4.md) 和 [需求覆盖审计](docs/validation/coverage.md)。多屏、混合 DPI、真实 UAC 和干净环境验证完成前，不能视为最终验收通过。补充硬件与交互验证可按 [实机操作单](docs/validation/manual.md) 执行。
 
 ## 开发
 
@@ -50,6 +50,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1
 cargo run --locked --bin desktop_probe -- --output artifacts/desktop-probe.json
 ```
 
-打包、GUI、键盘、真实热键、异常和资源检查脚本的调用方式见 [复现入口](docs/validation/phase-3.md#可复现命令)。先用 `cargo build --locked --bins` 构建原生辅助探针；各检查使用独立配置并顺序执行，输入检查在用户切换焦点时取消。测试脚本需要 PowerShell 7，应用本身没有这一依赖。
+打包、GUI、键盘、热键、异常和资源检查见 [阶段 3 复现入口](docs/validation/phase-3.md#可复现命令)；覆盖升级、应用状态和真实对话框／全屏检查见 [阶段 4 复现入口](docs/validation/phase-4.md#复现)。先用 `cargo build --locked --bins` 构建原生辅助探针；各检查使用独立配置并顺序执行，输入检查在用户切换焦点时取消。测试脚本需要 PowerShell 7，应用本身没有这一依赖。
 
 [设计基线](docs/design.md) · [验收门槛](docs/acceptance.md) · [领域术语](CONTEXT.md)
