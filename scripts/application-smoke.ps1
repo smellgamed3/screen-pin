@@ -6,7 +6,8 @@ param(
     [string]$CodePath = (Join-Path $env:LOCALAPPDATA 'Programs/Microsoft VS Code/Code.exe'),
     [switch]$ExtendedStates,
     [switch]$TemporaryDialogs,
-    [switch]$Fullscreen
+    [switch]$Fullscreen,
+    [ValidateRange(0,100)][int]$PrecisionCycles=0
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -16,40 +17,7 @@ $OutputDir = (New-Item -ItemType Directory -Path $OutputDir -Force).FullName
 $configDir = (New-Item -ItemType Directory -Path (Join-Path $OutputDir ('config-' + [Guid]::NewGuid().ToString('N')))).FullName
 $unique = [Guid]::NewGuid().ToString('N')
 $startupBefore = [Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run','ScreenPin',$null)
-Add-Type @'
-using System;
-using System.Text;
-using System.Runtime.InteropServices;
-public static class PinApplication {
- public delegate bool EnumProc(IntPtr hwnd,IntPtr data);
- [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc callback,IntPtr data);
- [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd,out uint pid);
- [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetClassNameW(IntPtr hwnd,StringBuilder text,int length);
- [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr hwnd,StringBuilder text,int length);
- [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr hwnd,int id);
- [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
- [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
- [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr hwnd);
- [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr hwnd);
- [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
- [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
- [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd,IntPtr dc,uint flags);
- [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd,out Rect rect);
- [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd,int command);
- [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
- [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hwnd);
- [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
- [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hwnd,IntPtr after,int x,int y,int width,int height,uint flags);
- [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr hwnd,uint msg,IntPtr wp,IntPtr lp);
- [DllImport("user32.dll")] public static extern IntPtr SendMessageW(IntPtr hwnd,uint msg,IntPtr wp,IntPtr lp);
- [DllImport("user32.dll",EntryPoint="SendMessageW",CharSet=CharSet.Unicode)] public static extern IntPtr SendText(IntPtr hwnd,uint msg,IntPtr wp,StringBuilder text);
- [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hwnd,uint attr,out Rect rect,uint size);
- [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr hwnd,uint flags);
- [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern bool GetMonitorInfoW(IntPtr monitor,ref Monitor info);
- [StructLayout(LayoutKind.Sequential)] public struct Rect {public int Left,Top,Right,Bottom;}
- [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] public struct Monitor {public uint Size;public Rect Bounds,Work;public uint Flags;[MarshalAs(UnmanagedType.ByValTStr,SizeConst=32)]public string Device;}
-}
-'@
+Add-Type -Path (Join-Path $PSScriptRoot 'support/application-native.cs')
 if($TemporaryDialogs -or $Fullscreen){Add-Type -Path (Join-Path $PSScriptRoot 'support/application-input.cs')}
 $previousDpi = [PinApplication]::SetThreadDpiAwarenessContext([IntPtr](-4))
 $process = $null
@@ -121,6 +89,27 @@ function Preset-Application($run) {
     $matches=@($config.profiles[0].applications|Where-Object {$_.app_id.EndsWith($run.executable.ToLowerInvariant())})
     if($matches.Count -ne 1){throw 'Cannot identify the single owned application preset'}
     return $matches[0].default
+}
+function Precision-Application($run){
+    $samples=@();$configPath=Join-Path $configDir 'config.json'
+    $baseline=Bounds-Application $run.handle
+    for($cycle=1;$cycle -le $PrecisionCycles;$cycle++){
+        Confirm-ApplicationOwner $run|Out-Null
+        Click-Control 109;Select-Target $run.title;Click-Control 111
+        if((Read-Control ([PinApplication]::GetDlgItem($ui,138))) -notmatch '已记住|位置未变化'){throw 'Precision capture did not report a successful save/no-op'}
+        $hash=(Get-FileHash -LiteralPath $configPath).Hash
+        [PinApplication]::SetWindowPos($run.handle,[IntPtr]::Zero,(560+($cycle%4)*17),(330+($cycle%3)*13),(850+($cycle%2)*20),600,0x4014)|Out-Null
+        Start-Sleep -Milliseconds 90
+        $moved=Bounds-Application $run.handle
+        if((Bounds-Error $moved $baseline) -le 2){throw 'Precision displacement did not move the target'}
+        $foreground=[PinApplication]::GetForegroundWindow()
+        Click-Control 112
+        $actual=Bounds-Application $run.handle;$errorPx=Bounds-Error $actual $baseline
+        $status=Read-Control ([PinApplication]::GetDlgItem($ui,138))
+        if($errorPx -gt 2 -or $status -notmatch '^已恢复|^已符合预设' -or [PinApplication]::GetForegroundWindow() -ne $foreground -or (Get-FileHash -LiteralPath $configPath).Hash -ne $hash){throw ('Precision cycle '+$cycle+' failed: '+$status+'; error='+$errorPx)}
+        $samples+=@{cycle=$cycle;baseline=$baseline;actual=$actual;max_edge_error_px=$errorPx;foreground_preserved=$true;restore_no_write=$true}
+    }
+    return @{status='Passed';cycles=$PrecisionCycles;max_edge_error_px=($samples.max_edge_error_px|Measure-Object -Maximum).Maximum;samples=$samples;input_method='GUI capture/restore after explicit selection; baseline fixed across all cycles, no keyboard/mouse input.'}
 }
 function Assert-State($condition,[string]$message){if(-not $condition){throw $message};$script:stateChecks.Add($message)}
 function Focus-Application($run){
@@ -348,6 +337,7 @@ try {
             if($restoreFeedback -notmatch '已恢复|已符合'){throw ('Unexpected restore feedback: '+$restoreFeedback)}
             if(-not $focusUnchanged){throw 'Restore or status feedback changed the foreground window'}
             $result=[ordered]@{application=$spec.name;status='Passed';version=$executable.VersionInfo.ProductVersion;executable=$executable.FullName;pid=$run.pid;handle=$run.handle.ToInt64();command_line=$owner.CommandLine;profile=$profile;unique_title=$title;monitor=$monitor;dpi=[PinApplication]::GetDpiForWindow($run.handle);before=$before;moved=$moved;restored=$restored;physical_edge_errors=$errors;remember_feedback=$rememberFeedback;restore_feedback=$restoreFeedback;foreground_unchanged=$focusUnchanged;checks=@('isolated profile and process ownership verified','selected GUI capture','target was actually moved','DWM edges restored within 2 physical pixels','success feedback confirmed','foreground unchanged')}
+            if($PrecisionCycles){$result['precision']=Precision-Application $run}
             if($ExtendedStates){$result['extended_states']=States-Application $run}
             if($TemporaryDialogs){$result['temporary_dialog']=Dialog-Application $run}
             if($Fullscreen){$result['fullscreen']=Fullscreen-Application $run}
@@ -398,6 +388,8 @@ $report['remaining_owned_application_processes']=$remaining
 $report['cleanup_check_scope']='Owned main-process exit plus a post-close command-line scan for the unique isolated user-data directories; no process-name termination.'
 $report['extended_states_requested']=$ExtendedStates.IsPresent
 $report['script_sha256']=$scriptHash
+$report['native_helper_sha256']=(Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'support/application-native.cs')).Hash
+$report['precision_cycles_requested']=$PrecisionCycles
 if($ExtendedStates){$report.limitations=@('one physical display/current DPI; default taskbar configuration only','ordinary/maximized/minimized states through GUI commands, not real hotkey input','no fullscreen/dialog/elevated app test','independent profiles; no pre-existing user window operated','machine has development tools; does not prove clean-machine deployment')}
 $report['temporary_dialog_requested']=$TemporaryDialogs.IsPresent
 $report['fullscreen_requested']=$Fullscreen.IsPresent
