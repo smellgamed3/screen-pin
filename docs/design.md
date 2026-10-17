@@ -1,6 +1,6 @@
 # Screen Pin 首版设计
 
-状态：Q1–Q18 的产品决定已保留；本版为复核后的设计基线，实现与分阶段验收正在进行，整体实机验收尚未完成。复核依据见 [design-review.md](design-review.md)，发布门槛见 [acceptance.md](acceptance.md)，当前证据见 [阶段 21](validation/phase-21.md)。
+状态：Q1–Q18 的产品决定已保留；本版为复核后的设计基线，实现与分阶段验收正在进行，整体实机验收尚未完成。复核依据见 [design-review.md](design-review.md)，发布门槛见 [acceptance.md](acceptance.md)，当前证据见 [阶段 22](validation/phase-22.md)。
 
 ## 1. 定位与范围
 

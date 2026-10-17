@@ -37,3 +37,5 @@ $screenPinTestDir = Join-Path $env:LOCALAPPDATA ('ScreenPin-Acceptance-' + [Guid
 ## 结果格式
 
 每个场景记录：`场景 → 环境 → 步骤 → 期望 → 实际 → 通过／失败／未验证 → 原始证据路径`。失败应保留测试配置、截图、精确提示和复现步骤；含窗口标题或设备标识的原始报告保存在本地，不直接提交到仓库。
+
+大字体和高对比度可在隔离 Sandbox 中执行 `pwsh -NoProfile -File scripts/sandbox-smoke.ps1 -Appearance`，直接证据及当前失败项见 [阶段 22](phase-22.md)。它会实际改变自身来宾的字体和主题；宿主设置不变。当前阅读门槛失败，不按 UIA／边界检查通过推定文字完整。

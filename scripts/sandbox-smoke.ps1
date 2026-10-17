@@ -2,15 +2,17 @@
 param(
  [string]$ZipPath=(Join-Path $PSScriptRoot '../dist/ScreenPin-0.1.0-windows-x64.zip'),
  [string]$OutputDir=(Join-Path $PSScriptRoot '../artifacts/sandbox'),
- [switch]$Lifecycle
+ [switch]$Lifecycle,
+ [switch]$Appearance
 )
 $ErrorActionPreference='Stop'
+if($Lifecycle -and $Appearance){throw 'Select one Sandbox test mode'}
 $ZipPath=(Get-Item -LiteralPath $ZipPath).FullName
 $runId=[Guid]::NewGuid().ToString('D');$root=(New-Item -ItemType Directory -Path (Join-Path $OutputDir ('sandbox-'+$runId)) -Force).FullName
 $inputDir=(New-Item -ItemType Directory -Path (Join-Path $root 'input')).FullName;$resultDir=(New-Item -ItemType Directory -Path (Join-Path $root 'result')).FullName
 $report=[ordered]@{run_id=$runId;started_utc=[DateTime]::UtcNow.ToString('o');zip_sha256=(Get-FileHash -LiteralPath $ZipPath).Hash;script_sha256=(Get-FileHash -LiteralPath $PSCommandPath).Hash;steps=@();errors=@();owned_session_created=$false;owned_session_stopped=$false;passed=$false;scope='A fresh Windows Sandbox only when no existing session is present; immutable input mapping, private output mapping, network/clipboard/media disabled. No feature enablement, elevation or guest development-tool installation.'}
-$report['mode']=if($Lifecycle){'lifecycle'}else{'basic'}
-$guestName=if($Lifecycle){'sandbox-lifecycle-guest.ps1'}else{'sandbox-guest-smoke.ps1'}
+$report['mode']=if($Appearance){'appearance'}elseif($Lifecycle){'lifecycle'}else{'basic'}
+$guestName=if($Appearance){'sandbox-appearance-guest.ps1'}elseif($Lifecycle){'sandbox-lifecycle-guest.ps1'}else{'sandbox-guest-smoke.ps1'}
 $wsb=$null;$connectProcess=$null;$startAttempted=$false
 function Invoke-Sandbox([string[]]$arguments,[string]$name){$out=@(& $script:wsb @arguments 2>&1);$code=$LASTEXITCODE;$script:report.steps+=@{step=$name;arguments=$arguments;exit_code=$code;output=@($out|ForEach-Object ToString)};if($code -ne 0){throw ($name+' failed: '+($out -join ' '))};return ($out -join "`n")}
 try{
@@ -21,7 +23,8 @@ try{
  if(@($before.WindowsSandboxEnvironments).Count -ne 0){throw 'An existing Sandbox session is present; no session was adopted or stopped'}
  Copy-Item -LiteralPath $ZipPath -Destination (Join-Path $inputDir 'ScreenPin.zip')
  foreach($name in @('real-keys.cs','application-native.cs','sandbox-guest-smoke.ps1')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot ('support/'+$name)) -Destination (Join-Path $inputDir $name)}
- if($Lifecycle){Copy-Item -LiteralPath (Join-Path $PSScriptRoot ('support/'+$guestName)) -Destination (Join-Path $inputDir $guestName)}
+ if($Lifecycle -or $Appearance){Copy-Item -LiteralPath (Join-Path $PSScriptRoot ('support/'+$guestName)) -Destination (Join-Path $inputDir $guestName)}
+ if($Appearance){foreach($name in @('viewport-native.cs','guest-appearance.cs','desktop-keyboard.cs')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot ('support/'+$name)) -Destination (Join-Path $inputDir $name)}}
  Add-Type -AssemblyName System.IO.Compression.FileSystem;$archive=[IO.Compression.ZipFile]::OpenRead($ZipPath)
  try{$entry=$archive.GetEntry('screen-pin.exe');if(-not $entry){throw 'Release ZIP executable missing'};$stream=$entry.Open();$hash=[Security.Cryptography.SHA256]::Create();try{$exeHash=[Convert]::ToHexString($hash.ComputeHash($stream))}finally{$hash.Dispose();$stream.Dispose()}}finally{$archive.Dispose()}
  $report['exe_sha256']=$exeHash

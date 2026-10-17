@@ -57,3 +57,5 @@ cargo run --locked --bin desktop_probe -- --output artifacts/desktop-probe.json
 [设计基线](docs/design.md) · [验收门槛](docs/acceptance.md) · [领域术语](CONTEXT.md)
 
 隔离来宾中的真实 Explorer 重启、开机启动登记与路径修复验证见 [阶段 21](docs/validation/phase-21.md)。系统重启登录仍待验证。
+
+系统大字体／高对比度实测及当前文字截断问题见 [阶段 22](docs/validation/phase-22.md)。`scripts/sandbox-smoke.ps1 -Appearance` 包含阅读门槛，当前构建会明确报告该门槛失败，尚不作为无障碍验收通过。
