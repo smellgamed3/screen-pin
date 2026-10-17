@@ -7,6 +7,8 @@ param(
     [switch]$ExtendedStates,
     [switch]$TemporaryDialogs,
     [switch]$Fullscreen,
+    [switch]$HotkeyStates,
+    [ValidateRange(1,100)][int]$HotkeyCycles=50,
     [ValidateRange(0,100)][int]$PrecisionCycles=0
 )
 $ErrorActionPreference = 'Stop'
@@ -18,7 +20,7 @@ $configDir = (New-Item -ItemType Directory -Path (Join-Path $OutputDir ('config-
 $unique = [Guid]::NewGuid().ToString('N')
 $startupBefore = [Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run','ScreenPin',$null)
 Add-Type -Path (Join-Path $PSScriptRoot 'support/application-native.cs')
-if($TemporaryDialogs -or $Fullscreen){Add-Type -Path (Join-Path $PSScriptRoot 'support/application-input.cs')}
+if($TemporaryDialogs -or $Fullscreen -or $HotkeyStates){Add-Type -Path (Join-Path $PSScriptRoot 'support/application-input.cs')}
 $previousDpi = [PinApplication]::SetThreadDpiAwarenessContext([IntPtr](-4))
 $process = $null
 $ui = [IntPtr]::Zero
@@ -180,6 +182,78 @@ function Keys-Application($run,[IntPtr]$handle,[int]$key,[int]$modifiers=0,[bool
     $ownerPid=if($handle -eq $run.handle){$run.pid}else{Confirm-DialogOwner $run $handle}
     [PinApplicationInput]::Chord($handle,$ownerPid,$run.handle,$run.pid,[ushort]$key,[uint32]$modifiers,$allowDialog)
 }
+function Wait-HotApplication($run,[scriptblock]$condition,[string]$description){
+    $watch=[Diagnostics.Stopwatch]::StartNew()
+    do{
+        [PinApplicationInput]::AssertForeground($run.handle,$run.pid,$run.handle,$run.pid)
+        if(& $condition){return}
+        Start-Sleep -Milliseconds 10
+    }while($watch.ElapsedMilliseconds -lt 4000)
+    throw ('Real hotkey timeout: '+$description)
+}
+function Remember-HotApplication($run){
+    $path=Join-Path $configDir 'config.json';$before=(Get-Content -LiteralPath $path -Raw|ConvertFrom-Json).revision
+    Keys-Application $run $run.handle 0x79 3
+    Wait-HotApplication $run { (Get-Content -LiteralPath $path -Raw|ConvertFrom-Json).revision -gt $before -and (Read-Control ([PinApplication]::GetDlgItem($ui,138))) -match '^已记住' } 'changed F10 persistence'
+}
+function Restore-HotApplication($run,$expected,[string]$scenario){
+    Confirm-ApplicationOwner $run|Out-Null
+    $path=Join-Path $configDir 'config.json';$hash=(Get-FileHash -LiteralPath $path).Hash
+    # Refresh completes through an owned GUI command before timing, so feedback
+    # from the previous successful restore cannot satisfy the next sample.
+    Click-Control 109
+    if((Read-Control ([PinApplication]::GetDlgItem($ui,138))) -match '^已恢复|^已符合预设'){throw 'Restore feedback was not cleared before the new real input'}
+    $before=Bounds-Application $run.handle
+    if((Bounds-Error $before $expected) -le 2){throw 'No actual displacement before real restore'}
+    $watch=[Diagnostics.Stopwatch]::StartNew()
+    Keys-Application $run $run.handle 0x78 3
+    Wait-HotApplication $run { (Bounds-Error (Bounds-Application $run.handle) $expected) -le 2 -and (Read-Control ([PinApplication]::GetDlgItem($ui,138))) -match '^已恢复|^已符合预设' } $scenario
+    $elapsed=$watch.Elapsed.TotalMilliseconds
+    $actual=Bounds-Application $run.handle;$status=Read-Control ([PinApplication]::GetDlgItem($ui,138))
+    Assert-State ($status.Contains('应用默认') -and (Get-FileHash -LiteralPath $path).Hash -eq $hash) ($scenario+': actual F9 uses the default without writing')
+    return @{scenario=$scenario;before=$before;expected=$expected;actual=$actual;edge_error_px=Bounds-Error $actual $expected;completion_ms=$elapsed;foreground_preserved=$true;config_unchanged=$true;feedback=$status}
+}
+function HotkeyStates-Application($run){
+    $script:stateChecks=[Collections.Generic.List[string]]::new();$samples=@()
+    Focus-Application $run
+    Confirm-ApplicationOwner $run|Out-Null
+    if(-not [PinApplication]::SetWindowPos($run.handle,[IntPtr]::Zero,230,200,980,650,0x4014)){throw 'Initial owned hotkey placement failed'}
+    Start-Sleep -Milliseconds 180
+    $normal=Bounds-Application $run.handle;Remember-HotApplication $run
+    Assert-State (-not (Preset-Application $run).placement.maximized) 'Actual F10 saves ordinary state'
+    for($cycle=1;$cycle -le $HotkeyCycles;$cycle++){
+        Confirm-ApplicationOwner $run|Out-Null
+        [PinApplicationInput]::AssertForeground($run.handle,$run.pid,$run.handle,$run.pid)
+        if(-not [PinApplication]::SetWindowPos($run.handle,[IntPtr]::Zero,(760+($cycle%3)*30),(450+($cycle%2)*30),820,580,0x4014)){throw 'Owned hotkey displacement failed'}
+        Wait-HotApplication $run {(Bounds-Error (Bounds-Application $run.handle) $normal) -gt 20} 'actual displacement'
+        Start-Sleep -Milliseconds 100
+        $samples+=Restore-HotApplication $run $normal ('ordinary-'+$cycle)
+    }
+    [PinApplication]::ShowWindow($run.handle,3)|Out-Null
+    Wait-HotApplication $run {[PinApplication]::IsZoomed($run.handle)} 'maximize owned app';Start-Sleep -Milliseconds 180
+    $maximum=Bounds-Application $run.handle;Remember-HotApplication $run
+    Assert-State ([PinApplication]::IsZoomed($run.handle) -and (Preset-Application $run).placement.maximized) 'Actual maximized F10 stores maximum state without restoring the window'
+    [PinApplication]::ShowWindow($run.handle,9)|Out-Null
+    Wait-HotApplication $run {-not [PinApplication]::IsZoomed($run.handle)} 'return owned app to ordinary state'
+    [PinApplication]::SetWindowPos($run.handle,[IntPtr]::Zero,780,490,820,580,0x4014)|Out-Null
+    Start-Sleep -Milliseconds 180
+    $samples+=Restore-HotApplication $run $maximum 'maximized'
+    Assert-State ([PinApplication]::IsZoomed($run.handle)) 'Actual F9 restores maximum state'
+    [PinApplication]::ShowWindow($run.handle,9)|Out-Null
+    Wait-HotApplication $run {-not [PinApplication]::IsZoomed($run.handle)} 'manual normal restore';Start-Sleep -Milliseconds 180
+    $manual=Bounds-Application $run.handle;$manualError=Bounds-Error $manual $normal
+    Assert-State ($manualError -le 2) 'Manual restore after actual maximum F9 retains the originally captured ordinary rectangle'
+    Remember-HotApplication $run
+    Assert-State (-not (Preset-Application $run).placement.maximized) 'Actual F10 replaces maximum state with ordinary state'
+    [PinApplication]::ShowWindow($run.handle,3)|Out-Null
+    Wait-HotApplication $run {[PinApplication]::IsZoomed($run.handle)} 'maximize before ordinary restore';Start-Sleep -Milliseconds 180
+    $samples+=Restore-HotApplication $run $normal 'ordinary-from-maximum'
+    Assert-State (-not [PinApplication]::IsZoomed($run.handle)) 'Actual F9 exits maximum state into the ordinary preset'
+    $ordinary=@($samples|Where-Object scenario -like 'ordinary-*'|Where-Object scenario -ne 'ordinary-from-maximum')
+    $sorted=@($ordinary.completion_ms|Sort-Object);$p95=$sorted[[Math]::Ceiling($sorted.Count*0.95)-1]
+    Assert-State ($ordinary.Count -eq $HotkeyCycles -and $p95 -le 300) 'Requested actual ordinary restore samples complete within the p95 300 ms budget'
+    return @{status='Passed';checks=$stateChecks.ToArray();restores=$samples;ordinary_cycles=$ordinary.Count;ordinary_completion_p95_ms=$p95;max_edge_error_px=($samples.edge_error_px|Measure-Object -Maximum).Maximum;manual_normal_edge_error_px=$manualError;input_method='Real foreground-checked SendInput Ctrl+Alt+F10/F9; native state transitions and displacement; GUI refresh clears stale feedback before each actual restore.';latency_definition='Stopwatch before the validated key wrapper until both visible DWM bounds and new explicit success feedback match; includes process ownership validation and 10 ms polling overhead, not an isolated Win32 dispatch duration.'}
+}
 function Dialog-Application($run){
     $script:stateChecks=[Collections.Generic.List[string]]::new()
     $script:dialogTrace=@()
@@ -242,7 +316,7 @@ function Fullscreen-Application($run){
     return @{status='Passed';checks=$stateChecks.ToArray();is_zoomed_while_fullscreen=$isZoomed;input_method='Owned foreground real F11 fullscreen toggle and Ctrl+Alt+F10/F9.'}
 }
 try {
-    if($TemporaryDialogs -or $Fullscreen){
+    if($TemporaryDialogs -or $Fullscreen -or $HotkeyStates){
         $script:existingInputHost=$false
         [PinApplication]::EnumWindows({param($handle,$data) $class=[Text.StringBuilder]::new(128);[PinApplication]::GetClassNameW($handle,$class,128)|Out-Null;if($class.ToString() -eq 'ScreenPin.Host'){$script:existingInputHost=$true};return $true},[IntPtr]::Zero)|Out-Null
         if($script:existingInputHost){throw 'Existing Screen Pin instance detected; real application input is cancelled before launch'}
@@ -256,7 +330,7 @@ try {
         },[IntPtr]::Zero)|Out-Null
         $ui -ne [IntPtr]::Zero -and (Read-Control ([PinApplication]::GetDlgItem($ui,138))) -notin @('','正在处理…')
     } 'Screen Pin initial refresh'
-    if($TemporaryDialogs -or $Fullscreen){$status=Read-Control ([PinApplication]::GetDlgItem($ui,208));if(([regex]::Matches($status,'已注册')).Count -ne 2 -or $status -match '不可用'){throw 'Owned Screen Pin does not have both hotkeys registered; no application input sent'}}
+    if($TemporaryDialogs -or $Fullscreen -or $HotkeyStates){$status=Read-Control ([PinApplication]::GetDlgItem($ui,208));if(([regex]::Matches($status,'已注册')).Count -ne 2 -or $status -match '不可用'){throw 'Owned Screen Pin does not have both hotkeys registered; no application input sent'}}
     foreach($spec in @(@{name='Brave';path=$BravePath},@{name='VSCode';path=$CodePath})) {
         $script:dialogTrace=@()
         $result=[ordered]@{application=$spec.name;status='Skipped';reason='';checks=@()}
@@ -339,12 +413,13 @@ try {
             $result=[ordered]@{application=$spec.name;status='Passed';version=$executable.VersionInfo.ProductVersion;executable=$executable.FullName;pid=$run.pid;handle=$run.handle.ToInt64();command_line=$owner.CommandLine;profile=$profile;unique_title=$title;monitor=$monitor;dpi=[PinApplication]::GetDpiForWindow($run.handle);before=$before;moved=$moved;restored=$restored;physical_edge_errors=$errors;remember_feedback=$rememberFeedback;restore_feedback=$restoreFeedback;foreground_unchanged=$focusUnchanged;checks=@('isolated profile and process ownership verified','selected GUI capture','target was actually moved','DWM edges restored within 2 physical pixels','success feedback confirmed','foreground unchanged')}
             if($PrecisionCycles){$result['precision']=Precision-Application $run}
             if($ExtendedStates){$result['extended_states']=States-Application $run}
+            if($HotkeyStates){$result['hotkey_states']=HotkeyStates-Application $run}
             if($TemporaryDialogs){$result['temporary_dialog']=Dialog-Application $run}
             if($Fullscreen){$result['fullscreen']=Fullscreen-Application $run}
         } catch {
             $result.status='Failed';$result.reason=$_.Exception.Message
-            if($TemporaryDialogs -or $Fullscreen){$script:inputCancelled=$true}
-            if(($TemporaryDialogs -or $Fullscreen) -and $run -and $run.pid){
+            if($TemporaryDialogs -or $Fullscreen -or $HotkeyStates){$script:inputCancelled=$true}
+            if(($TemporaryDialogs -or $Fullscreen -or $HotkeyStates) -and $run -and $run.pid){
                 $result['input_diagnostics']=[PinApplicationInput]::Snapshot($run.pid)
                 if($dialogTrace){$result['dialog_trace']=$dialogTrace}
                 try{
@@ -393,8 +468,10 @@ $report['precision_cycles_requested']=$PrecisionCycles
 if($ExtendedStates){$report.limitations=@('one physical display/current DPI; default taskbar configuration only','ordinary/maximized/minimized states through GUI commands, not real hotkey input','no fullscreen/dialog/elevated app test','independent profiles; no pre-existing user window operated','machine has development tools; does not prove clean-machine deployment')}
 $report['temporary_dialog_requested']=$TemporaryDialogs.IsPresent
 $report['fullscreen_requested']=$Fullscreen.IsPresent
+$report['hotkey_states_requested']=$HotkeyStates.IsPresent
+$report['hotkey_cycles_requested']=if($HotkeyStates){$HotkeyCycles}else{0}
 $report['input_cancelled']=$inputCancelled
-if($TemporaryDialogs -or $Fullscreen){$report['input_helper_sha256']=(Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'support/application-input.cs')).Hash;$report.limitations=@('one physical display/current DPI and default taskbar configuration only','only the requested ordinary/state/dialog/fullscreen cases; no elevated app tested','Ctrl+O requests the owned common file dialog; no file is selected','input is checked against owned foreground/class/PID immediately before and after; observed user switching cancels later input','machine has development tools; does not prove clean-machine deployment')}
+if($TemporaryDialogs -or $Fullscreen -or $HotkeyStates){$report['input_helper_sha256']=(Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'support/application-input.cs')).Hash;$report.limitations=@('one physical display/current DPI and default taskbar configuration only','only the requested GUI and real hotkey state/dialog/fullscreen cases; no elevated app tested','Ctrl+O requests the owned common file dialog; no file is selected','input is checked against owned foreground/class/PID immediately before and after; observed user switching cancels later input','machine has development tools; does not prove clean-machine deployment')}
 $report['passed']=$results.Count -eq 2 -and @($results|Where-Object {$_.status -ne 'Passed'}).Count -eq 0 -and $report.screen_pin_exited -and $report.hkcu_startup_unchanged -and $remaining.Count -eq 0
 $report|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $OutputDir 'application-smoke.json') -Encoding utf8
 $report|ConvertTo-Json -Depth 12
