@@ -1,5 +1,5 @@
 ﻿#Requires -Version 5.1
-param([string]$InputDir='C:\ScreenPinInput',[string]$OutputDir='C:\ScreenPinOutput')
+param([string]$InputDir='C:\ScreenPinInput',[string]$OutputDir='C:\ScreenPinOutput',[switch]$FunctionsOnly)
 $ErrorActionPreference='Stop'
 $expected=Get-Content -LiteralPath (Join-Path $InputDir 'expected.json') -Raw -Encoding utf8|ConvertFrom-Json
 $report=[ordered]@{run_id=$expected.run_id;started_utc=[DateTime]::UtcNow.ToString('o');checks=@();startups=@();restores=@();normal_exits=@();errors=@();passed=$false;scope='Fresh Windows Sandbox desktop; original release ZIP, default guest configuration, owned native fixture, real foreground hotkeys and ordinary restart. No external runtime or development tool installation.';limitations=@('One virtual display/current guest DPI and the Sandbox account; does not prove physical mixed DPI, UAC handoff, Narrator, independent usability or a full Windows installation/reboot.')}
@@ -36,6 +36,7 @@ function Start-GuestApp {
 function Stop-GuestApp {
  if($process -and -not $process.HasExited){$owner=Get-CimInstance Win32_Process -Filter ('ProcessId='+$process.Id);if($owner.ExecutablePath -ine $exePath){throw 'Guest exit identity mismatch'};[uint32]$pidOwner=0;[PinRealKeys]::GetWindowThreadProcessId($hostWindow,[ref]$pidOwner)|Out-Null;if($pidOwner -ne $process.Id){throw 'Own host window identity mismatch'};[PinRealKeys]::PostMessageW($hostWindow,0x111,[IntPtr]403,[IntPtr]::Zero)|Out-Null;if(-not $process.WaitForExit(8000)){throw 'Normal guest exit timed out'};Assert-Guest ($process.ExitCode -eq 0) 'Guest release exited normally';$report.normal_exits+=@{pid=$process.Id;exit_code=$process.ExitCode}}
 }
+if($FunctionsOnly){return}
 try{
  $os=Get-CimInstance Win32_OperatingSystem;$identity=[Security.Principal.WindowsIdentity]::GetCurrent();$principal=[Security.Principal.WindowsPrincipal]::new($identity)
  $tools=@();foreach($name in @('cargo','rustc','cl','vswhere','dotnet','pwsh')){if(Get-Command $name -ErrorAction SilentlyContinue){$tools+=$name}}
