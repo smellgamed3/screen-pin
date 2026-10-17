@@ -1,5 +1,7 @@
 # 阶段 15：配置读取性能与大小边界
 
+历史构建：本页对应 7AB66FC9 EXE；本页列出的写入上限待查项已在 [阶段 16](phase-16.md) 修复并验证。
+
 日期：2026-10-17（Asia/Shanghai）。上一轮动态标题规则验收已提交。本轮复核 F14 的配置保护边界时，发现合法大配置启动过慢，已修复并补齐原件保留、备份恢复和边界检查。
 
 ## 复现、定位与修复
@@ -33,7 +35,7 @@
 
 | 工件 | SHA256 |
 | --- | --- |
-| [ZIP](../../dist/ScreenPin-0.1.0-windows-x64.zip) | `1444220B0241439580CB74ADB66B82EBDB10A35767F58BE491C1BFFAE4193586` |
+| [历史 ZIP 校验记录](../../artifacts/packages/package-803349c8ff61421ea2a5592ebd4353f4/package-verification.json) | `1444220B0241439580CB74ADB66B82EBDB10A35767F58BE491C1BFFAE4193586` |
 | Release EXE／解压 EXE | `7AB66FC92984A589E0209DD41A96AE97A8EC5EEA49F605414E58CAE5BFC0470E` |
 
 格式、严格 Clippy、all-targets **63 项测试**及离线构建打包通过。[嵌入清单](../../artifacts/validation/phase-15-embedded.manifest) 保持 PerMonitorV2／asInvoker，[导入依赖](../../artifacts/validation/phase-15-dependencies.txt) 仅系统 DLL。旧构建完整状态保存为 [阶段 14 历史快照](phase-14-coverage.md)。

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
+const MAX_CONFIG_BYTES: usize = 8 * 1024 * 1024;
 
 pub enum LoadState {
     New(Config),
@@ -127,30 +128,30 @@ impl ConfigStore {
             return Err("配置处于保护状态，请先恢复备份或明确新建配置".into());
         }
         config.validate()?;
-        let data = serde_json::to_vec_pretty(config).map_err(|e| e.to_string())?;
+        let data = encode_config(config)?;
         let primary = self.path();
         if primary.exists() {
             // Only a validated, supported configuration can replace the last good backup.
-            let previous = read_config(&primary)?;
-            let bytes = serde_json::to_vec_pretty(&previous).map_err(|e| e.to_string())?;
+            let (_, bytes) = read_config_snapshot(&primary)?;
             replace_file(&self.backup_path(), &bytes)?;
         }
         replace_file(&primary, &data)
     }
 
     pub fn recover_backup(&mut self) -> Result<Config, String> {
-        let backup = read_config(&self.backup_path())?;
-        self.replace_protected(&backup)?;
+        let (backup, bytes) = read_config_snapshot(&self.backup_path())?;
+        self.replace_protected(&backup, &bytes)?;
         Ok(backup)
     }
 
     pub fn reset_explicitly(&mut self) -> Result<Config, String> {
         let config = Config::default();
-        self.replace_protected(&config)?;
+        let bytes = encode_config(&config)?;
+        self.replace_protected(&config, &bytes)?;
         Ok(config)
     }
 
-    fn replace_protected(&mut self, config: &Config) -> Result<(), String> {
+    fn replace_protected(&mut self, config: &Config, bytes: &[u8]) -> Result<(), String> {
         // Recovery may bypass the damaged-config flag, but never the writer lock.
         // A failed handoff can leave this parent alive without ownership while
         // another process still owns the same configuration directory.
@@ -162,11 +163,13 @@ impl ConfigStore {
             return Err("管理员实例交接尚未确认，暂不能替换配置".into());
         }
         config.validate()?;
+        if bytes.len() > MAX_CONFIG_BYTES {
+            return Err("配置超过 8 MiB，未保存；请减少配置内容后重试。".into());
+        }
         if self.path().exists() {
             self.preserve_rejected_original()?;
         }
-        let data = serde_json::to_vec_pretty(config).map_err(|e| e.to_string())?;
-        replace_file(&self.path(), &data)?;
+        replace_file(&self.path(), bytes)?;
         self.writable = true;
         Ok(())
     }
@@ -215,10 +218,69 @@ fn acquire_reservation(directory: &Path) -> Result<File, String> {
 fn read_config(path: &Path) -> Result<Config, String> {
     let file = File::open(path).map_err(|e| format!("无法读取 {}：{e}", path.display()))?;
     // Refuse oversized or future files before deserializing into a narrower schema.
-    if file.metadata().map_err(|e| e.to_string())?.len() > 8 * 1024 * 1024 {
+    if file.metadata().map_err(|e| e.to_string())?.len() > MAX_CONFIG_BYTES as u64 {
         return Err("配置超过 8 MiB，已暂停写入以保留原文件".into());
     }
     decode_config(file)
+}
+
+fn read_config_snapshot(path: &Path) -> Result<(Config, Vec<u8>), String> {
+    let file = File::open(path).map_err(|e| format!("无法读取 {}：{e}", path.display()))?;
+    if file.metadata().map_err(|e| e.to_string())?.len() > MAX_CONFIG_BYTES as u64 {
+        return Err("配置超过 8 MiB，已暂停写入以保留原文件".into());
+    }
+    // Validate the same bounded bytes that will be copied, including a file
+    // which grows after metadata was read. Never reformat a valid backup.
+    let mut bytes = Vec::new();
+    file.take(MAX_CONFIG_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("无法读取 {}：{e}", path.display()))?;
+    if bytes.len() > MAX_CONFIG_BYTES {
+        return Err("配置超过 8 MiB，已暂停写入以保留原文件".into());
+    }
+    let config = decode_config(bytes.as_slice())?;
+    Ok((config, bytes))
+}
+
+fn encode_config(config: &Config) -> Result<Vec<u8>, String> {
+    struct LimitedBuffer {
+        bytes: Vec<u8>,
+        exceeded: bool,
+    }
+    impl Write for LimitedBuffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > MAX_CONFIG_BYTES - self.bytes.len() {
+                self.exceeded = true;
+                return Err(std::io::Error::other("configuration size limit"));
+            }
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut output = LimitedBuffer {
+        bytes: Vec::new(),
+        exceeded: false,
+    };
+    match serde_json::to_writer_pretty(&mut output, config) {
+        Ok(()) => return Ok(output.bytes),
+        Err(error) if !output.exceeded => return Err(error.to_string()),
+        Err(_) => {}
+    }
+    // Formatting alone must not make an otherwise supported config unwritable.
+    // Reuse the bounded allocation and retain every field in compact JSON.
+    output.bytes.clear();
+    output.exceeded = false;
+    if let Err(error) = serde_json::to_writer(&mut output, config) {
+        return Err(if output.exceeded {
+            "配置超过 8 MiB，未保存；请减少配置内容后重试。".into()
+        } else {
+            error.to_string()
+        });
+    }
+    Ok(output.bytes)
 }
 
 fn decode_config(reader: impl Read) -> Result<Config, String> {
@@ -313,6 +375,92 @@ mod tests {
             "32 KiB configuration issued {} underlying file reads",
             calls.get()
         );
+    }
+
+    #[test]
+    fn write_size_rejection_preserves_existing_primary_and_backup() {
+        let dir = TestDir::new();
+        let (mut store, _) = ConfigStore::open(dir.0.clone()).unwrap();
+        let mut saved = Config::default();
+        store.save(&saved).unwrap();
+        saved.revision = 1;
+        store.save(&saved).unwrap();
+        let primary = fs::read(store.path()).unwrap();
+        let backup = fs::read(store.backup_path()).unwrap();
+        let mut oversized = saved.clone();
+        oversized.displays.push(crate::model::DisplayRecord {
+            id: "screen".into(),
+            name: "x".repeat(8 * 1024 * 1024),
+            fingerprints: Vec::new(),
+        });
+        oversized.validate().unwrap();
+        let result = store.save(&oversized);
+        assert!(
+            result.is_err(),
+            "oversized save returned {result:?}; reload result: {:?}",
+            read_config(&store.path()).err()
+        );
+        assert_eq!(fs::read(store.path()).unwrap(), primary);
+        assert_eq!(fs::read(store.backup_path()).unwrap(), backup);
+        assert_eq!(read_config(&store.path()).unwrap(), saved);
+        assert!(store.is_writable());
+    }
+
+    fn compact_config_at_limit() -> Config {
+        let mut config = Config::default();
+        config.displays.push(crate::model::DisplayRecord {
+            id: "screen".into(),
+            name: "x".into(),
+            fingerprints: Vec::new(),
+        });
+        let small = serde_json::to_vec(&config).unwrap().len();
+        config.displays[0].name = "x".repeat(8 * 1024 * 1024 - small + 1);
+        assert_eq!(serde_json::to_vec(&config).unwrap().len(), 8 * 1024 * 1024);
+        assert!(serde_json::to_vec_pretty(&config).unwrap().len() > 8 * 1024 * 1024);
+        config
+    }
+
+    #[test]
+    fn write_size_accepts_compact_limit_and_keeps_backup_readable() {
+        let dir = TestDir::new();
+        let original = compact_config_at_limit();
+        let bytes = serde_json::to_vec(&original).unwrap();
+        fs::write(dir.0.join("config.json"), &bytes).unwrap();
+        let (mut store, state) = ConfigStore::open(dir.0.clone()).unwrap();
+        assert!(matches!(state, LoadState::Ready(_)));
+        let mut changed = original.clone();
+        changed.revision = 1;
+        store.save(&changed).unwrap();
+        assert_eq!(read_config(&store.path()).unwrap(), changed);
+        assert_eq!(read_config(&store.backup_path()).unwrap(), original);
+        assert_eq!(fs::read(store.backup_path()).unwrap(), bytes);
+        assert!(fs::metadata(store.path()).unwrap().len() <= 8 * 1024 * 1024);
+    }
+
+    #[test]
+    fn write_size_recovery_preserves_supported_compact_backup_bytes() {
+        let dir = TestDir::new();
+        let expected = compact_config_at_limit();
+        let bytes = serde_json::to_vec(&expected).unwrap();
+        fs::write(dir.0.join("config.backup.json"), &bytes).unwrap();
+        fs::write(dir.0.join("config.json"), b"{truncated").unwrap();
+        let (mut store, state) = ConfigStore::open(dir.0.clone()).unwrap();
+        assert!(matches!(state, LoadState::ReadOnly { .. }));
+        assert_eq!(store.recover_backup().unwrap(), expected);
+        assert_eq!(read_config(&store.path()).unwrap(), expected);
+        assert_eq!(fs::read(store.path()).unwrap(), bytes);
+        assert_eq!(fs::read(store.backup_path()).unwrap(), bytes);
+        assert!(store.is_writable());
+        let preserved = fs::read_dir(&dir.0)
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|p| {
+                p.file_name()
+                    .to_string_lossy()
+                    .starts_with("config.preserved-")
+            })
+            .unwrap();
+        assert_eq!(fs::read(preserved.path()).unwrap(), b"{truncated");
     }
 
     #[test]
