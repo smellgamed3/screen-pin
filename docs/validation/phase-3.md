@@ -1,5 +1,7 @@
 # 阶段 3：热键事务、配置保护与恢复
 
+历史记录：本文对应 0889BCE9 构建；当前构建与证据见 [阶段 6](phase-6.md)，旧构建覆盖快照见 [阶段 5 审计](phase-5-coverage.md)。
+
 日期：2026-10-17（Asia/Shanghai）。继续本机单屏功能验收；用户要求先完成功能、稳定性与验收，再集中优化外观和交互。当前首版整体仍未通过全部发布门槛。历史见 [阶段 2](phase-2.md)，当前需求审计见 [coverage.md](coverage.md)。
 
 同一构建后续的 ZIP 覆盖升级、实际应用最大化／最小化、真实文件对话框与全屏证据见 [阶段 4](phase-4.md)；本页保留阶段 3 当时的执行范围。
@@ -15,7 +17,7 @@
 
 | 文件 | SHA256 |
 | --- | --- |
-| [当前 ZIP](../../dist/ScreenPin-0.1.0-windows-x64.zip) | `0C082493A62C5E3D85FEADFA072C18DE8DDF7655894CD10B0BA5DF972A25C1AA` |
+| [历史包校验](../../artifacts/packages/package-622ec0a08cc94ed283fd2dd237746838/package-verification.json) | `0C082493A62C5E3D85FEADFA072C18DE8DDF7655894CD10B0BA5DF972A25C1AA` |
 | Release EXE／包内 EXE | `0889BCE91A15BB08E9BC197F4017F58D6AD39C94E8D0A408548AC18914985424` |
 
 仍为 0.1.0 开发预览，Win11 x64、普通权限；本机 2560×1440，工作区 2560×1392，96 DPI。当前二进制 [manifest](../../artifacts/validation/phase-3-embedded.manifest) 为 PerMonitorV2／asInvoker；[导入依赖](../../artifacts/validation/phase-3-dependencies.txt) 仅列系统 DLL。不能据此宣称干净系统已经实测。

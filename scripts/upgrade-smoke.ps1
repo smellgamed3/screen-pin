@@ -4,7 +4,8 @@ param(
     [string]$PackagePath=(Join-Path $PSScriptRoot '../dist/ScreenPin-0.1.0-windows-x64.zip'),
     [string]$ReleaseExe=(Join-Path $PSScriptRoot '../target/release/screen-pin.exe'),
     [string]$UiaProbePath=(Join-Path $PSScriptRoot '../target/debug/accessibility_probe.exe'),
-    [string]$OutputDir=(Join-Path $PSScriptRoot '../artifacts/upgrade')
+    [string]$OutputDir=(Join-Path $PSScriptRoot '../artifacts/upgrade'),
+    [switch]$UseDefaultConfigPath
 )
 $ErrorActionPreference='Stop'
 $PreviousExe=(Get-Item -LiteralPath $PreviousExe).FullName
@@ -13,7 +14,8 @@ $ReleaseExe=(Get-Item -LiteralPath $ReleaseExe).FullName
 $UiaProbePath=(Get-Item -LiteralPath $UiaProbePath).FullName
 $runDir=(New-Item -ItemType Directory -Path (Join-Path $OutputDir ('upgrade-'+[Guid]::NewGuid().ToString('N'))) -Force).FullName
 $installDir=(New-Item -ItemType Directory -Path (Join-Path $runDir 'program')).FullName
-$configDir=(New-Item -ItemType Directory -Path (Join-Path $runDir 'user-data')).FullName
+$isolatedLocalAppData=$null
+if($UseDefaultConfigPath){$isolatedLocalAppData=(New-Item -ItemType Directory -Path (Join-Path $runDir 'local appdata 测试')).FullName;$configDir=Join-Path $isolatedLocalAppData 'ScreenPin'}else{$configDir=(New-Item -ItemType Directory -Path (Join-Path $runDir 'user-data')).FullName}
 $installedExe=Join-Path $installDir 'screen-pin.exe'
 $configPath=Join-Path $configDir 'config.json'
 $helperPath=Join-Path $PSScriptRoot 'support/real-keys.cs'
@@ -23,10 +25,15 @@ $report=[ordered]@{
     package=$PackagePath;package_sha256=(Get-FileHash -LiteralPath $PackagePath).Hash;current_sha256=(Get-FileHash -LiteralPath $ReleaseExe).Hash
     script_sha256=(Get-FileHash -LiteralPath $PSCommandPath).Hash;helper_sha256=(Get-FileHash -LiteralPath $helperPath).Hash
     install_dir=$installDir;config_dir=$configDir;passed_checks=@();restores=@();normal_exits=@();errors=@();passed=$false
+    default_path_requested=$UseDefaultConfigPath.IsPresent;child_localappdata=$isolatedLocalAppData
     scope='Stop old build, overwrite only a fresh program directory from ZIP, start new build with the same external config, then restore old default and title rule through real SendInput.'
     limitations=@('Same-user, same-machine, schema-v1 development-build replacement; not an old-schema migration or clean-machine/system-restart test.','Uses an explicit isolated --config-dir instead of the daily LOCALAPPDATA folder.','Settings and rule creation use owned GUI commands; restore and capture use real input on only the new fixture.','Tray icon visibility and complete startup timing are not measured.')
 }
+if($UseDefaultConfigPath){$report.limitations=@('Same-machine schema-v1 development-build replacement; not a clean-machine, system-restart or old-schema-migration test.','Child-only LOCALAPPDATA override tests the default-directory branch with spaces/Unicode without writing the daily profile; real user-folder ACLs and permissions are not proved.','Settings/rules use owned GUI commands and actual restore/capture use real fixture input; tray visibility and complete startup timing are not measured.')}
 $process=$null;$settings=[IntPtr]::Zero;$hostWindow=[IntPtr]::Zero
+$parentLocalAppData=$env:LOCALAPPDATA
+$dailyPaths=@((Join-Path $parentLocalAppData 'ScreenPin/config.json'),(Join-Path $parentLocalAppData 'ScreenPin/config.backup.json'))
+$dailyHashes=@($dailyPaths|ForEach-Object {if(Test-Path -LiteralPath $_){(Get-FileHash -LiteralPath $_).Hash}else{$null}})
 $startupBefore=[Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run','ScreenPin',$null)
 function Assert-Upgrade($condition,[string]$message){if(-not $condition){throw $message};$report.passed_checks+=$message}
 function Read-Upgrade {Get-Content -LiteralPath $configPath -Raw|ConvertFrom-Json}
@@ -35,14 +42,21 @@ function Status-Upgrade {[PinRealKeys]::Text($settings,138)}
 function Wait-Upgrade([scriptblock]$condition,[string]$description){$watch=[Diagnostics.Stopwatch]::StartNew();do{[PinRealKeys]::AssertForeground();if(& $condition){return};Start-Sleep -Milliseconds 15}while($watch.ElapsedMilliseconds -lt 6000);throw ('Timeout: '+$description+'; '+(Status-Upgrade))}
 function Confirm-UpgradeOwner {
     $owner=Get-CimInstance Win32_Process -Filter ('ProcessId='+$process.Id)
-    if(-not $owner -or $owner.ExecutablePath -ine $installedExe -or -not $owner.CommandLine.Contains('"'+$configDir+'"')){throw 'Installed test process/configuration ownership mismatch'}
+    if(-not $owner -or $owner.ExecutablePath -ine $installedExe){throw 'Installed test process ownership mismatch'}
+    if($UseDefaultConfigPath){
+        if($owner.CommandLine.Contains('--config-dir')){throw 'Default-path test must not pass an explicit config directory'}
+        if($settings -ne [IntPtr]::Zero){$actual=[PinRealKeys]::Text($settings,210);if($actual.StartsWith('\\?\')){$actual=$actual.Substring(4)};if($actual -ine $configPath){throw 'Default path reported by the owned GUI does not match child LOCALAPPDATA'}}
+    }elseif(-not $owner.CommandLine.Contains('"'+$configDir+'"')){throw 'Installed test configuration ownership mismatch'}
 }
 function Start-UpgradeApp {
-    $script:process=Start-Process -FilePath $installedExe -ArgumentList '--background','--config-dir',('"'+$configDir+'"') -WindowStyle Hidden -PassThru
+    $launch=@{FilePath=$installedExe;WindowStyle='Hidden';PassThru=$true;ArgumentList=@('--background')}
+    if($UseDefaultConfigPath){$launch['Environment']=@{LOCALAPPDATA=$isolatedLocalAppData}}else{$launch.ArgumentList+=@('--config-dir',('"'+$configDir+'"'))}
+    $script:process=Start-Process @launch
     $script:settings=[IntPtr]::Zero;$script:hostWindow=[IntPtr]::Zero;$watch=[Diagnostics.Stopwatch]::StartNew()
     do{$hosts=[PinRealKeys]::FindClass('ScreenPin.Host',$process.Id);$windows=[PinRealKeys]::FindClass('ScreenPin.Settings',$process.Id);if($hosts.Length -eq 1 -and $windows.Length -eq 1 -and [PinRealKeys]::Responsive($hosts[0]) -and [PinRealKeys]::Text($windows[0],138) -notin @('','正在处理…')){$script:hostWindow=$hosts[0];$script:settings=$windows[0];break};Start-Sleep -Milliseconds 20}while($watch.ElapsedMilliseconds -lt 8000)
     if($settings -eq [IntPtr]::Zero){throw 'Installed test app did not become ready'}
     Confirm-UpgradeOwner
+    if($UseDefaultConfigPath){Assert-Upgrade ((Test-Path -LiteralPath $configPath) -and -not (Test-Path -LiteralPath (Join-Path $installDir 'config.json'))) 'Unconfigured launch creates config only in child LOCALAPPDATA/ScreenPin'}
     $status=[PinRealKeys]::Text($settings,208)
     Assert-Upgrade (([regex]::Matches($status,'已注册')).Count -eq 2 -and $status -notmatch '不可用') 'Installed build has both configured hotkeys registered'
 }
@@ -128,6 +142,10 @@ finally{
     $report['startup_registry_unchanged']=$startupBefore -ceq [Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run','ScreenPin',$null)
     if(-not $report.startup_registry_unchanged){$report.errors+='User Run registry unexpectedly changed'}
     $report['finished_utc']=[DateTime]::UtcNow.ToString('o')
+    $report['parent_localappdata_unchanged']=$env:LOCALAPPDATA -ceq $parentLocalAppData
+    $afterHashes=@($dailyPaths|ForEach-Object {if(Test-Path -LiteralPath $_){(Get-FileHash -LiteralPath $_).Hash}else{$null}})
+    $report['daily_config_unchanged']=($afterHashes|ConvertTo-Json -Compress) -ceq ($dailyHashes|ConvertTo-Json -Compress)
+    if(-not $report.parent_localappdata_unchanged -or -not $report.daily_config_unchanged){$report.errors+='Parent LOCALAPPDATA or daily configuration unexpectedly changed'}
     $report.passed=$report.errors.Count -eq 0 -and $report.restores.Count -eq 3 -and $report.normal_exits.Count -eq 2
     $report|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $runDir 'report.json') -Encoding utf8
     Write-Host ('Upgrade smoke report: '+(Join-Path $runDir 'report.json'))

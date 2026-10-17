@@ -2,7 +2,8 @@
 param(
     [string]$ExePath = (Join-Path $PSScriptRoot '../target/release/screen-pin.exe'),
     [string]$OutputDir = (Join-Path $PSScriptRoot '../artifacts/settings'),
-    [string]$UiaProbePath = (Join-Path $PSScriptRoot '../target/debug/accessibility_probe.exe')
+    [string]$UiaProbePath = (Join-Path $PSScriptRoot '../target/debug/accessibility_probe.exe'),
+    [switch]$StorageFaults
 )
 $ErrorActionPreference = 'Stop'
 $ExePath = (Get-Item -LiteralPath $ExePath).FullName
@@ -17,11 +18,12 @@ $report = [ordered]@{
     exe_sha256=(Get-FileHash -LiteralPath $ExePath).Hash
     script_sha256=(Get-FileHash -LiteralPath $PSCommandPath).Hash
     helper_sha256=(Get-FileHash -LiteralPath $helperPath).Hash
-    config_dir=$configDir; passed_checks=@(); real_input_cycles=@(); normal_exits=@(); errors=@(); passed=$false
+    config_dir=$configDir; storage_faults_requested=$StorageFaults.IsPresent;storage_faults=@();passed_checks=@(); real_input_cycles=@(); normal_exits=@(); errors=@(); passed=$false
     scope='Settings controls are edited with bounded native messages to the owned hidden GUI. Each accepted or retained mapping is exercised with real SendInput on the new fixture; no WM_HOTKEY injection.'
     limitations=@('Single local desktop/DPI and synthetic fixture; settings form editing is programmatic, not a keyboard navigation test.','Persistence failure uses a sharing lock on only the fresh test config; not every storage fault is covered.','Startup conflict is a controlled independent registration on the fixture thread, not an unrelated third-party application.')
 }
 $process=$null; $settings=[IntPtr]::Zero; $hostWindow=[IntPtr]::Zero; $sequence=0
+$storageBlockers=[Collections.Generic.List[string]]::new()
 $startupBefore=[Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run','ScreenPin',$null)
 function Assert-Settings($condition,[string]$message){if(-not $condition){throw $message};$report.passed_checks+=$message}
 function Read-Settings {Get-Content -LiteralPath $configPath -Raw|ConvertFrom-Json}
@@ -94,6 +96,26 @@ function Exercise-Settings([int]$restore,[int]$remember,[string]$scenario){
     Assert-Settings ($errorPx -le 2 -and (Hash-Settings) -eq $savedHash) ($scenario+': real hotkeys capture and restore without restore writes')
     $report.real_input_cycles+=@{scenario=$scenario;restore_vk=$restore;remember_vk=$remember;edge_error_px=$errorPx}
 }
+function Block-Storage([string]$kind){
+    Confirm-SettingsOwner
+    if($storageBlockers.Count){throw 'Previous storage blockers are still present'}
+    # Collision directories fail actual create_new/copy calls inside only this
+    # run's config. No ACLs, disk settings, or production fault hooks are changed.
+    foreach($index in 0..127){
+        $name=switch($kind){'backup-temp'{"config.backup.tmp-$($process.Id)-$index"};'primary-temp'{"config.tmp-$($process.Id)-$index"};'preserve'{"config.preserved-$($process.Id)-$index.json"};default{throw 'Unknown storage blocker kind'}}
+        $path=[IO.Path]::GetFullPath((Join-Path $configDir $name))
+        if(-not $path.StartsWith($configDir+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase) -or (Test-Path -LiteralPath $path)){throw 'Storage blocker must be a fresh child of the owned config directory'}
+        New-Item -ItemType Directory -Path $path|Out-Null;$storageBlockers.Add($path)
+    }
+}
+function Clear-Storage {
+    foreach($path in $storageBlockers){
+        $resolved=[IO.Path]::GetFullPath($path)
+        if(-not $resolved.StartsWith($configDir+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $resolved -PathType Container) -or @(Get-ChildItem -LiteralPath $resolved -Force).Count){throw 'Refusing removal of an unexpected/nonempty storage blocker'}
+        Remove-Item -LiteralPath $resolved
+    }
+    $storageBlockers.Clear()
+}
 try{
     if([PinRealKeys]::FindClass('ScreenPin.Host',0).Length){throw 'An existing Screen Pin instance owns global hotkeys; no changes or input made'}
     Start-SettingsApp
@@ -107,6 +129,48 @@ try{
     [PinRealKeys]::AssertForeground()
     Assert-Registered 0x78 0x79
     Exercise-Settings 0x78 0x79 'baseline'
+
+    if($StorageFaults){
+        $initialPlacement=(Read-Settings).profiles[0].applications[0].default.placement|ConvertTo-Json -Depth 8 -Compress
+        $initialFrame=[PinRealKeys]::Frame()
+        $before=Hash-Settings;$backupBefore=(Get-FileHash -LiteralPath (Join-Path $configDir 'config.backup.json')).Hash
+        $undoBefore=[PinRealKeys]::Text($settings,136)
+        Block-Storage 'backup-temp'
+        try{
+            Edit-Settings 0x7a 0x7b
+            Assert-Settings ((Status-Settings) -match '^无法写入临时配置' -and (Hash-Settings) -eq $before -and (Get-FileHash -LiteralPath (Join-Path $configDir 'config.backup.json')).Hash -eq $backupBefore) 'Backup temporary creation failure preserves primary and backup bytes'
+            Assert-Settings ([PinRealKeys]::Text($settings,136) -ceq $undoBefore) 'Backup temporary creation failure retains the visible prior undo entry'
+            Assert-Registered 0x78 0x79;Assert-Released 0x7a;Assert-Released 0x7b
+            $report.storage_faults+=@{kind='backup-temp';status=Status-Settings;primary_hash=$before;backup_hash=$backupBefore;undo_label=$undoBefore}
+        }finally{Clear-Storage}
+        Edit-Settings 0x7a 0x7b
+        Assert-Settings ((Status-Settings) -eq '设置已保存') 'Settings save succeeds after clearing the backup temporary blocker'
+        Exercise-Settings 0x7a 0x7b 'after backup temporary failure retry'
+        Edit-Settings 0x78 0x79
+
+        $before=Hash-Settings;$undoBefore=[PinRealKeys]::Text($settings,136);$savedFrame=[PinRealKeys]::Frame()
+        $null=[PinRealKeys]::Move(580,380,490,360)
+        Block-Storage 'primary-temp'
+        try{
+            [PinRealKeys]::Chord(0x79)
+            Wait-Settings {(Status-Settings) -match '^无法写入临时配置'} 'primary temporary creation failure'
+            Assert-Settings ((Hash-Settings) -eq $before -and (Get-FileHash -LiteralPath (Join-Path $configDir 'config.backup.json')).Hash -eq $before) 'Primary temporary creation failure retains primary and promotes only the prior valid config to backup'
+            Assert-Settings ([PinRealKeys]::Text($settings,136) -ceq $undoBefore) 'Failed real remember retains the visible prior undo entry'
+            [PinRealKeys]::Chord(0x78)
+            Wait-Settings {[PinRealKeys]::EdgeError([PinRealKeys]::Frame(),$savedFrame) -le 2 -and (Status-Settings) -match '^已恢复|^已符合预设'} 'runtime still restores the old placement after failed remember'
+            Assert-Settings ((Hash-Settings) -eq $before) 'Old runtime placement remains authoritative after failed real remember'
+            $report.storage_faults+=@{kind='primary-temp';failure='无法写入临时配置';primary_hash=$before;backup_hash=(Get-FileHash -LiteralPath (Join-Path $configDir 'config.backup.json')).Hash;restored_old_edge_error_px=[PinRealKeys]::EdgeError([PinRealKeys]::Frame(),$savedFrame);undo_label=$undoBefore}
+        }finally{Clear-Storage}
+        [PinRealKeys]::Command($settings,$process.Id,136)
+        Wait-Settings {(Status-Settings) -match '^已撤销'} 'undo preceding successful change after failed remember'
+        Assert-Settings (((Read-Settings).profiles[0].applications[0].default.placement|ConvertTo-Json -Depth 8 -Compress) -ceq $initialPlacement) 'After failed remember, actual undo restores the preceding successful update to its older placement'
+        $undoHash=Hash-Settings
+        [PinRealKeys]::Chord(0x78)
+        Wait-Settings {[PinRealKeys]::EdgeError([PinRealKeys]::Frame(),$initialFrame) -le 2 -and (Status-Settings) -match '^已恢复|^已符合预设'} 'real restore after preserved undo'
+        Assert-Settings ((Hash-Settings) -eq $undoHash) 'Restoring the preserved undo result makes no extra configuration write'
+        $faultTrace=$report.storage_faults[-1];$faultTrace['actual_undo_restored_older_placement']=$true;$faultTrace['post_undo_restore_error_px']=[PinRealKeys]::EdgeError([PinRealKeys]::Frame(),$initialFrame)
+        Exercise-Settings 0x78 0x79 'after primary temporary failure retry'
+    }
 
     $before=Hash-Settings
     Edit-Settings 0x7a 0x7a
@@ -206,15 +270,59 @@ try{
         Exercise-Settings 0x78 0x7a 'after recovery conflict repair'
     }finally{[PinRealKeys]::Unblock(0x7b)}
     Stop-SettingsApp
+
+    if($StorageFaults){
+        $validBytes=[IO.File]::ReadAllBytes($configPath)
+        [IO.File]::WriteAllBytes((Join-Path $configDir 'config.backup.json'),$validBytes)
+        [IO.File]::WriteAllBytes($configPath,$damagedBytes)
+        $damagedHash=Hash-Settings;$backupBefore=(Get-FileHash -LiteralPath (Join-Path $configDir 'config.backup.json')).Hash
+        Start-SettingsApp
+        Block-Storage 'preserve'
+        try{
+            [PinRealKeys]::Command($settings,$process.Id,211)
+            Wait-Settings {(Status-Settings) -match '^无法保留原配置'} 'preservation-copy failure'
+            Assert-Settings ((Hash-Settings) -eq $damagedHash -and (Get-FileHash -LiteralPath (Join-Path $configDir 'config.backup.json')).Hash -eq $backupBefore -and -not [PinRealKeys]::Enabled($settings,$process.Id,207) -and [PinRealKeys]::Enabled($settings,$process.Id,211)) 'Failed original preservation retains primary/backup bytes and protected recovery mode'
+            $report.storage_faults+=@{kind='preserve';status=Status-Settings;primary_hash=$damagedHash;backup_hash=$backupBefore}
+        }finally{Clear-Storage}
+        [PinRealKeys]::Command($settings,$process.Id,211)
+        Wait-Settings {(Status-Settings) -match '^已恢复有效备份'} 'recovery retry after preservation blocker removal'
+        Assert-Settings ([Convert]::ToBase64String([IO.File]::ReadAllBytes($configPath)) -eq [Convert]::ToBase64String($validBytes)) 'Recovery retry restores the exact previously valid config'
+        Assert-Registered 0x78 0x7a
+        Exercise-Settings 0x78 0x7a 'after preservation failure retry'
+        Stop-SettingsApp
+
+        $validBytes=[IO.File]::ReadAllBytes($configPath)
+        [IO.File]::WriteAllBytes((Join-Path $configDir 'config.backup.json'),$validBytes)
+        [IO.File]::WriteAllBytes($configPath,$damagedBytes)
+        Start-SettingsApp
+        $history=@()
+        foreach($index in 0..1){
+            $path=Join-Path $configDir ("config.preserved-$($process.Id)-$index.json")
+            $bytes=[Text.Encoding]::UTF8.GetBytes('Older original '+$index)
+            $file=[IO.File]::Open($path,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write)
+            try{$file.Write($bytes,0,$bytes.Length)}finally{$file.Dispose()}
+            $history+=@{path=$path;hash=(Get-FileHash -LiteralPath $path).Hash}
+        }
+        [PinRealKeys]::Command($settings,$process.Id,211)
+        Wait-Settings {(Status-Settings) -match '^已恢复有效备份'} 'recovery skips reused PID/counter filenames'
+        Assert-Settings (@($history|Where-Object {(Get-FileHash -LiteralPath $_.path).Hash -ne $_.hash}).Count -eq 0) 'Recovery leaves both older colliding preserved originals byte-identical'
+        $newPreserved=Join-Path $configDir ("config.preserved-$($process.Id)-2.json")
+        Assert-Settings ((Get-FileHash -LiteralPath $newPreserved).Hash -eq $damagedHash) 'Recovery uses the next unused filename for the new damaged original'
+        Assert-Settings ([Convert]::ToBase64String([IO.File]::ReadAllBytes($configPath)) -eq [Convert]::ToBase64String($validBytes)) 'Filename collision handling still restores the exact valid configuration'
+        $report.storage_faults+=@{kind='preserve-collision';older_files=$history;new_preserved=$newPreserved;status=Status-Settings}
+        Exercise-Settings 0x78 0x7a 'after preserved filename collision'
+        Stop-SettingsApp
+    }
 }catch{$report.errors+=$_.Exception.Message}
 finally{
+    try{Clear-Storage}catch{$report.errors+=('Storage blocker cleanup: '+$_.Exception.Message)}
     try{Stop-SettingsApp}catch{$report.errors+=('App cleanup: '+$_.Exception.Message)}
     try{[PinRealKeys]::StopFixture()}catch{$report.errors+=('Fixture cleanup: '+$_.Exception.Message)}
     $startupAfter=[Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run','ScreenPin',$null)
     $report['startup_registry_unchanged']=$startupBefore -ceq $startupAfter
     if(-not $report.startup_registry_unchanged){$report.errors+='User Run registry unexpectedly changed'}
     $report['finished_utc']=[DateTime]::UtcNow.ToString('o')
-    $report.passed=$report.errors.Count -eq 0 -and $report.real_input_cycles.Count -eq 10 -and $report.normal_exits.Count -eq 5
+    $report.passed=$report.errors.Count -eq 0 -and $report.real_input_cycles.Count -eq $(if($StorageFaults){14}else{10}) -and $report.normal_exits.Count -eq $(if($StorageFaults){7}else{5}) -and $report.storage_faults.Count -eq $(if($StorageFaults){4}else{0})
     $report|ConvertTo-Json -Depth 10|Set-Content -LiteralPath (Join-Path $runDir 'report.json') -Encoding utf8
     Write-Host ('Settings smoke report: '+(Join-Path $runDir 'report.json'))
 }

@@ -163,17 +163,40 @@ impl ConfigStore {
         }
         config.validate()?;
         if self.path().exists() {
-            let id = TEMP_ID.fetch_add(1, Ordering::Relaxed);
-            let preserved = self
-                .directory
-                .join(format!("config.preserved-{}-{id}.json", std::process::id()));
-            fs::copy(self.path(), preserved).map_err(|e| format!("无法保留原配置：{e}"))?;
+            self.preserve_rejected_original()?;
         }
         let data = serde_json::to_vec_pretty(config).map_err(|e| e.to_string())?;
         replace_file(&self.path(), &data)?;
         self.writable = true;
         Ok(())
     }
+
+    fn preserve_rejected_original(&self) -> Result<(), String> {
+        // A PID may be reused after a previous run. Never replace an existing
+        // preserved original, even when the process-local counter restarts.
+        for _ in 0..128 {
+            let id = TEMP_ID.fetch_add(1, Ordering::Relaxed);
+            let preserved = self
+                .directory
+                .join(format!("config.preserved-{}-{id}.json", std::process::id()));
+            match preserve_original(&self.path(), &preserved) {
+                Ok(()) => return Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(format!("无法保留原配置：{error}")),
+            }
+        }
+        Err("无法保留原配置：已有保留文件名冲突过多，请重试；原件保持不变".into())
+    }
+}
+
+fn preserve_original(source: &Path, destination: &Path) -> std::io::Result<()> {
+    let mut source = File::open(source)?;
+    let mut destination = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)?;
+    std::io::copy(&mut source, &mut destination)?;
+    destination.sync_all()
 }
 
 fn acquire_reservation(directory: &Path) -> Result<File, String> {
@@ -305,6 +328,21 @@ mod tests {
                     .to_string_lossy()
                     .starts_with("config.preserved-"))
         );
+    }
+
+    #[test]
+    fn original_preservation_never_overwrites_a_previous_recovery_copy() {
+        let dir = TestDir::new();
+        let source = dir.0.join("config.json");
+        let preserved = dir.0.join("config.preserved-collision.json");
+        fs::write(&source, b"{new damaged original").unwrap();
+        fs::write(&preserved, b"older preserved original").unwrap();
+        assert!(preserve_original(&source, &preserved).is_err());
+        assert_eq!(fs::read(&preserved).unwrap(), b"older preserved original");
+        assert_eq!(fs::read(&source).unwrap(), b"{new damaged original");
+        let next = dir.0.join("config.preserved-fresh.json");
+        preserve_original(&source, &next).unwrap();
+        assert_eq!(fs::read(next).unwrap(), b"{new damaged original");
     }
 
     #[test]

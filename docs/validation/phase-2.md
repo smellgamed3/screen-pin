@@ -1,6 +1,6 @@
 # 阶段 2：本机单屏、键盘与异常处理
 
-日期：2026-10-17（Asia/Shanghai）。本文已冻结为阶段 2 历史记录；最新构建见 [阶段 3](phase-3.md)。本轮按用户要求先完成本机单屏测试；多屏等原有门槛继续有效，尚未宣布首版最终验收通过。[阶段 1](phase-1.md) 及其 [覆盖快照](phase-1-coverage.md) 保留为历史，本阶段覆盖见 [历史快照](phase-2-coverage.md)，当前覆盖以 [coverage.md](coverage.md) 为准。
+日期：2026-10-17（Asia/Shanghai）。本文已冻结为阶段 2 历史记录；最新构建见 [阶段 6](phase-6.md)。本轮按用户要求先完成本机单屏测试；多屏等原有门槛继续有效，尚未宣布首版最终验收通过。[阶段 1](phase-1.md) 及其 [覆盖快照](phase-1-coverage.md) 保留为历史，本阶段覆盖见 [历史快照](phase-2-coverage.md)，当前覆盖以 [coverage.md](coverage.md) 为准。
 
 ## 实测发现与修复
 
