@@ -1,5 +1,7 @@
 # 阶段 11：预设草稿与热键交错
 
+历史记录：本页对应 0590ECE2 构建；最新构建与设置草稿修复见 [阶段 12](phase-12.md)。
+
 日期：2026-10-17（Asia/Shanghai）。本轮修复恢复窗口时丢失未保存预设编辑的问题，补齐草稿与热键更新、保存、撤销及忙时命令的交错检查。外观与交互集中打磨仍安排在功能验收之后；本轮属于影响正常使用的交互缺陷修复。
 
 ## 复现与改进
@@ -37,12 +39,12 @@
 
 | 工件 | SHA256 |
 | --- | --- |
-| [ZIP](../../dist/ScreenPin-0.1.0-windows-x64.zip) | `4A52DEC47C7B143479EF2D7314D70431EC52C9490D97542D4A2184D4497AFF6B` |
-| Release EXE／解压 EXE | `0590ECE2CF3E276533F952F4AB4F614D5AB6A3B99CA6BE7ECB3030F8C3E5A715` |
+| [历史 ZIP 校验记录](../../artifacts/packages/package-d7677396e4db403182a39df298fb9672/package-verification.json) | `4A52DEC47C7B143479EF2D7314D70431EC52C9490D97542D4A2184D4497AFF6B` |
+| [归档解压 EXE](../../artifacts/packages/package-d7677396e4db403182a39df298fb9672/extracted/screen-pin.exe) | `0590ECE2CF3E276533F952F4AB4F614D5AB6A3B99CA6BE7ECB3030F8C3E5A715` |
 
 格式、严格 Clippy、all-targets **62 项测试**和离线打包通过。[嵌入清单](../../artifacts/validation/phase-11-embedded.manifest) 保持 PerMonitorV2／asInvoker，[导入依赖](../../artifacts/validation/phase-11-dependencies.txt) 仅为系统 DLL；干净环境仍待实测。旧 `C8603D7F…` 证据保存在 [阶段 10 历史快照](phase-10-coverage.md)。
 
-本构建 **15 项回归全部通过**，顺序、命令参数和退出码见 [执行记录](../../artifacts/validation/phase-11-suite.json)。原始结果以实际 EXE 哈希区分，当前完整索引见 [覆盖审计](coverage.md)。
+本构建 **15 项回归全部通过**，顺序、命令参数和退出码见 [执行记录](../../artifacts/validation/phase-11-suite.json)。原始结果以实际 EXE 哈希区分，该构建完整索引见 [阶段 11 历史快照](phase-11-coverage.md)。
 
 | 回归 | 当前证据 |
 | --- | --- |

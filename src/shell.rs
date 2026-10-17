@@ -154,6 +154,12 @@ struct EditorDraft {
     keyword: String,
 }
 
+struct SettingsDraft {
+    restore: String,
+    remember: String,
+    autostart: bool,
+}
+
 struct Shell {
     host: HWND,
     window: HWND,
@@ -372,7 +378,7 @@ unsafe fn run_native(
     shell.make_font();
     shell.create_controls()?;
     shell.register_initial();
-    shell.refresh_controls();
+    shell.refresh_controls(None);
     if let Err(error) = shell.tray_add() {
         shell.result(&error, false);
     }
@@ -1068,6 +1074,13 @@ impl Shell {
             match reply {
                 WorkerReply::Done(response) => {
                     let response = *response;
+                    // Unrelated responses and retryable save failures keep raw
+                    // input. A committed Save or changed recovered settings
+                    // reload the form from the authoritative snapshot.
+                    let settings_draft = (response.view.config.settings
+                        == self.view.config.settings
+                        && !(self.pending_settings.is_some() && response.success))
+                        .then(|| self.settings_draft());
                     let restarted = self.pending_restart && response.success;
                     self.pending_restart = false;
                     self.finish_settings(response.success, &response.view.config.settings);
@@ -1077,7 +1090,7 @@ impl Shell {
                         self.selected_profile = response.view.active_profile.clone();
                     }
                     self.view = response.view;
-                    self.refresh_controls();
+                    self.refresh_controls(settings_draft);
                     let draft_conflict = if editor_saved && response.success {
                         false
                     } else {
@@ -1169,7 +1182,15 @@ impl Shell {
         result == IDYES
     }
 
-    fn refresh_controls(&mut self) {
+    fn settings_draft(&self) -> SettingsDraft {
+        SettingsDraft {
+            restore: self.value(ID_RESTORE_KEY),
+            remember: self.value(ID_REMEMBER_KEY),
+            autostart: self.checked(ID_AUTOSTART),
+        }
+    }
+
+    fn refresh_controls(&mut self, settings_draft: Option<SettingsDraft>) {
         if self
             .selected_profile
             .as_ref()
@@ -1251,9 +1272,14 @@ impl Shell {
             );
         }
         self.rebuild_presets();
-        self.text(ID_RESTORE_KEY, &self.active_settings.restore.label());
-        self.text(ID_REMEMBER_KEY, &self.active_settings.remember.label());
-        self.check(ID_AUTOSTART, self.view.config.settings.autostart);
+        let form = settings_draft.unwrap_or_else(|| SettingsDraft {
+            restore: self.active_settings.restore.label(),
+            remember: self.active_settings.remember.label(),
+            autostart: self.view.config.settings.autostart,
+        });
+        self.text(ID_RESTORE_KEY, &form.restore);
+        self.text(ID_REMEMBER_KEY, &form.remember);
+        self.check(ID_AUTOSTART, form.autostart);
         self.text(
             ID_STARTUP_WARNING,
             self.view.startup_warning.as_deref().unwrap_or(""),
@@ -1672,7 +1698,14 @@ impl Shell {
             ID_CREATE_DEFAULT,
             editable && target && self.can_create_default(),
         );
-        self.enable(ID_SAVE_SETTINGS, available && !self.view.read_only);
+        for id in [
+            ID_RESTORE_KEY,
+            ID_REMEMBER_KEY,
+            ID_AUTOSTART,
+            ID_SAVE_SETTINGS,
+        ] {
+            self.enable(id, available && !self.view.read_only);
+        }
         self.enable(ID_RECOVER, available && self.view.read_only);
         self.enable(ID_RESET_CONFIG, available && self.view.read_only);
         self.enable(ID_ASSOC_APPLY, available && !self.view.read_only);
@@ -2149,7 +2182,8 @@ impl Shell {
                         .selection(id, true)
                         .and_then(|i| self.view.config.profiles.get(i))
                         .map(|p| p.id.clone());
-                    self.refresh_controls();
+                    let settings_draft = self.settings_draft();
+                    self.refresh_controls(Some(settings_draft));
                     self.match_preview();
                 }
                 ID_ASSOC_PROFILE => {

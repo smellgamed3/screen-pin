@@ -25,8 +25,9 @@ Windows 11 x64 窗口位置工具：记住应用窗口在指定显示器的位�
 - 对尺寸有特殊限制或无响应的应用，会报告受限或暂未确认，不把偏差自动写成新预设。
 - 配置损坏或格式过新时保护原文件，可从设置明确恢复备份或新建。
 - 预设编辑草稿在窗口恢复后保留；同一预设被更新时会提示冲突，拒绝旧草稿覆盖。点击刷新可放弃冲突草稿并载入最新值。
+- 设置页输入在恢复和刷新后保留，明确保存成功才生效；保存失败可直接重试，原有热键继续有效。
 
-当前交付为开发预览；实测范围和未验证项见 [阶段验收记录](docs/validation/phase-11.md) 和 [需求覆盖审计](docs/validation/coverage.md)。多屏、混合 DPI、真实 UAC 和干净环境验证完成前，不能视为最终验收通过。补充硬件与交互验证可按 [实机操作单](docs/validation/manual.md) 执行。
+当前交付为开发预览；实测范围和未验证项见 [阶段验收记录](docs/validation/phase-12.md) 和 [需求覆盖审计](docs/validation/coverage.md)。多屏、混合 DPI、真实 UAC 和干净环境验证完成前，不能视为最终验收通过。补充硬件与交互验证可按 [实机操作单](docs/validation/manual.md) 执行。
 
 ## 开发
 
@@ -51,6 +52,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1
 cargo run --locked --bin desktop_probe -- --output artifacts/desktop-probe.json
 ```
 
-当前构建、配置故障、默认目录升级的回归脚本调用方式见 [复现入口](docs/validation/phase-6.md#回归与复现)。先用 `cargo build --locked --bins` 构建原生辅助探针；各检查使用独立配置并顺序执行，输入检查在用户切换焦点时取消。脚本需 PowerShell 7，默认目录升级选项需 7.4+；应用本身没有这一依赖。切焦与关闭／重建竞态检查见 [阶段 7](docs/validation/phase-7.md#复现)；托盘和确认框键盘检查见 [阶段 8 复现入口](docs/validation/phase-8.md#复现与剩余门槛)。默认启动实际就绪检查见 [阶段 9](docs/validation/phase-9.md#复现与观察边界)。Explorer／Terminal 状态与标题热键复现见 [阶段 10](docs/validation/phase-10.md#复现与剩余范围)。预设草稿交错复现见 [阶段 11](docs/validation/phase-11.md#复现与待验范围)。
+当前构建、配置故障、默认目录升级的回归脚本调用方式见 [复现入口](docs/validation/phase-6.md#回归与复现)。先用 `cargo build --locked --bins` 构建原生辅助探针；各检查使用独立配置并顺序执行，输入检查在用户切换焦点时取消。脚本需 PowerShell 7，默认目录升级选项需 7.4+；应用本身没有这一依赖。切焦与关闭／重建竞态检查见 [阶段 7](docs/validation/phase-7.md#复现)；托盘和确认框键盘检查见 [阶段 8 复现入口](docs/validation/phase-8.md#复现与剩余门槛)。默认启动实际就绪检查见 [阶段 9](docs/validation/phase-9.md#复现与观察边界)。Explorer／Terminal 状态与标题热键复现见 [阶段 10](docs/validation/phase-10.md#复现与剩余范围)。预设草稿交错复现见 [阶段 11](docs/validation/phase-11.md#复现与待验范围)；设置草稿及保存失败重试见 [阶段 12](docs/validation/phase-12.md#复现与剩余范围)。
 
 [设计基线](docs/design.md) · [验收门槛](docs/acceptance.md) · [领域术语](CONTEXT.md)

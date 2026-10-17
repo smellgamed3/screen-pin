@@ -211,7 +211,17 @@ function Exercise-TitleRules($run){
 try{
     if([PinRealKeys]::FindClass('ScreenPin.Host',0).Length){throw 'Existing Screen Pin instance detected; no user window or config operated'}
     $process=Start-Process -FilePath $ExePath -ArgumentList '--background','--config-dir',('"'+$configDir+'"') -WindowStyle Hidden -PassThru
-    Wait-ShellApp {$hosts=[PinRealKeys]::FindClass('ScreenPin.Host',$process.Id);$windows=[PinRealKeys]::FindClass('ScreenPin.Settings',$process.Id);if($hosts.Length -eq 1 -and $windows.Length -eq 1 -and [PinRealKeys]::Text($windows[0],138) -notin @('','正在处理…')){$script:hostWindow=$hosts[0];$script:settings=$windows[0];return $true};return $false} 'Screen Pin startup'
+    Wait-ShellApp {
+        if($process.HasExited){throw 'Screen Pin exited before startup readiness'}
+        $hosts=[PinRealKeys]::FindClass('ScreenPin.Host',$process.Id)
+        if($hosts.Length -eq 1){$script:hostWindow=$hosts[0]}
+        $windows=[PinRealKeys]::FindClass('ScreenPin.Settings',$process.Id)
+        if($windows.Length -ne 1){return $false}
+        $script:settings=$windows[0]
+        if(-not [PinRealKeys]::Enabled($settings,$process.Id,138)){return $false}
+        try{return [PinRealKeys]::Text($settings,138) -notin @('','正在处理…')}
+        catch{if($_.Exception.Message -notlike '*Timed out reading own app result*'){throw};return $false}
+    } 'Screen Pin startup'
     $token=[Guid]::NewGuid().ToString('N')
     if($HotkeyStates -or $TitleRules){$null=[PinRealKeys]::StartFixture()}
     $folder=(New-Item -ItemType Directory -Path (Join-Path $runDir ('ScreenPin-Explorer-'+$token))).FullName
