@@ -81,6 +81,15 @@ try{
   }
   foreach($id in $wanted){Assert-Guest ($seen.ContainsKey($id)) ($name+': enabled Tab stop '+$id+' reached')}
  }
+ # Cover every one-row STATIC caption, plus the fixed page and Undo buttons.
+ # Keep multiline copy and scrollable edit/list contents in their separate checks.
+ $singleRowLabels=@{
+  100=@(104,107,113,116,118,119,121,123,125,127,130)
+  101=@(201,203,209)
+  102=@(301,304,306,313)
+ }
+ $fixedCaptions=@(100,101,102,136,137,143)
+ $report['readability_expected_samples']=3*2*(($singleRowLabels.Values|ForEach-Object {$_.Count}|Measure-Object -Sum).Sum+3*$fixedCaptions.Count)
  foreach($mode in @('default','large-font','large-font-high-contrast')){
   @{mode=$mode;phase='before-system-change';utc=[DateTime]::UtcNow.ToString('o')}|ConvertTo-Json|Set-Content (Join-Path $OutputDir 'guest-progress.json') -Encoding utf8
   if($mode -ne 'default'){$metrics=[PinGuestAppearance]::ReadMetrics();$messageFont=$metrics.Message;$messageFont.Height=-24;$metrics.Message=$messageFont;[PinGuestAppearance]::ApplyMetrics($metrics);Assert-Guest ([PinGuestAppearance]::ReadMetrics().Message.Height -eq -24) 'Actual guest system message font is 24 px'}
@@ -103,7 +112,7 @@ try{
    [PinViewport]::SetWindowPos($settings,[IntPtr]::Zero,40,40,$size[0],$size[1],0x4014)|Out-Null
    foreach($page in @(100,101,102)){
     Command-Guest $page;$name=$mode+'-'+$size[0]+'-page-'+$page
-    $labels=if($page -eq 100){@(104,136,143)}elseif($page -eq 101){@(201,203,136,143)}else{@(136,143)}
+    $labels=@($singleRowLabels[$page])+$fixedCaptions
     foreach($id in $labels){$h=[PinViewport]::GetDlgItem($settings,$id);$text=[PinRealKeys]::Text($settings,$id);$r=[PinViewport]::Bounds($h);$measured=[PinGuestAppearance]::TextWidth($h,$text);$report.text_metrics+=@{scene=$name;id=$id;text=$text;measured_width_px=$measured;available_width_px=$r.Right-$r.Left;overflow=$measured -gt ($r.Right-$r.Left)}}
     [PinViewport]::Message($settings,$process.Id,0x115,6);Check-Appearance ($name+'-top');Image-Appearance ($name+'-top')
     [PinViewport]::Message($settings,$process.Id,0x115,7);Check-Appearance ($name+'-bottom')
@@ -125,7 +134,7 @@ finally{
  if($oldDpi -ne [IntPtr]::Zero){[PinApplication]::SetThreadDpiAwarenessContext($oldDpi)|Out-Null}
  $report['startup_registry_unchanged']=$startupBefore -ceq [Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run','ScreenPin',$null)
  $report['functional_checks_passed']=$report.errors.Count -eq 0 -and $report.restores.Count -eq 3 -and $report.normal_exits.Count -eq 1 -and $report.guest_settings_restored -and $report.startup_registry_unchanged
- $report['readability_passed']=$report.text_metrics.Count -eq 54 -and @($report.text_metrics|Where-Object overflow).Count -eq 0;$report.passed=$report.functional_checks_passed -and $report.readability_passed;if(-not $report.readability_passed){$report.errors+='Readability gate: one-row label or Undo text is wider than its actual control'}
+ $report['readability_passed']=$report.readability_expected_samples -gt 0 -and $report.text_metrics.Count -eq $report.readability_expected_samples -and @($report.text_metrics|Where-Object overflow).Count -eq 0;$report.passed=$report.functional_checks_passed -and $report.readability_passed;if(-not $report.readability_passed){$report.errors+='Readability gate: one-row caption is wider than its actual control, or sampling is incomplete'}
  $report['finished_utc']=[DateTime]::UtcNow.ToString('o');$report|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $OutputDir 'guest-report.json') -Encoding utf8
 }
 if(-not $report.passed){exit 1}
