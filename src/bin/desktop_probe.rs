@@ -19,6 +19,31 @@ use windows::{
 
 unsafe extern "system" fn fixture_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     static REBUILDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    static MIN_WIDTH: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+    static MIN_HEIGHT: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+    if m == WM_APP + 42 {
+        std::thread::sleep(Duration::from_millis(w.0.min(5000) as u64));
+        return LRESULT(0);
+    }
+    if m == WM_APP + 43 {
+        MIN_WIDTH.store(w.0.min(4000) as i32, std::sync::atomic::Ordering::Relaxed);
+        MIN_HEIGHT.store(
+            l.0.clamp(0, 4000) as i32,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        return LRESULT(0);
+    }
+    if m == WM_WINDOWPOSCHANGING && l.0 != 0 {
+        let position = unsafe { &mut *(l.0 as *mut WINDOWPOS) };
+        if position.flags.0 & SWP_NOSIZE.0 == 0 {
+            position.cx = position
+                .cx
+                .max(MIN_WIDTH.load(std::sync::atomic::Ordering::Relaxed));
+            position.cy = position
+                .cy
+                .max(MIN_HEIGHT.load(std::sync::atomic::Ordering::Relaxed));
+        }
+    }
     if m == WM_APP + 41 {
         REBUILDING.store(true, std::sync::atomic::Ordering::Relaxed);
         unsafe {
@@ -62,7 +87,7 @@ unsafe extern "system" fn fixture_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) ->
     }
     unsafe { DefWindowProcW(h, m, w, l) }
 }
-fn fixture(hung: bool) -> Result<(), String> {
+fn fixture(hung: bool, title: Option<&str>) -> Result<(), String> {
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let instance = GetModuleHandleW(None).map_err(|e| e.to_string())?;
@@ -75,10 +100,15 @@ fn fixture(hung: bool) -> Result<(), String> {
         if RegisterClassW(&class) == 0 {
             return Err("RegisterClassW failed".into());
         }
+        let title: Vec<u16> = title
+            .unwrap_or("Screen Pin isolated desktop probe")
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
         let window = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             w!("ScreenPinDesktopProbeFixture"),
-            w!("Screen Pin isolated desktop probe"),
+            windows::core::PCWSTR(title.as_ptr()),
             WS_OVERLAPPEDWINDOW,
             120,
             120,
@@ -354,7 +384,12 @@ fn run() -> Result<serde_json::Value, String> {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--fixture") {
-        if let Err(e) = fixture(args.iter().any(|a| a == "--hung")) {
+        let title = args
+            .iter()
+            .position(|a| a == "--title")
+            .and_then(|index| args.get(index + 1))
+            .map(String::as_str);
+        if let Err(e) = fixture(args.iter().any(|a| a == "--hung"), title) {
             eprintln!("{e}");
             std::process::exit(1)
         }

@@ -211,8 +211,17 @@ try {
     [PinApplication]::SetThreadDpiAwarenessContext($previousDpi)|Out-Null
 }
 $startupAfter=[Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run','ScreenPin',$null)
+$ownedProfiles=@($results|ForEach-Object {$_.profile}|Where-Object {$_})
+$cleanupDeadline=[DateTime]::UtcNow.AddSeconds(8)
+do {
+    $remaining=@(Get-CimInstance Win32_Process|Where-Object {$commandLine=$_.CommandLine;$commandLine -and @($ownedProfiles|Where-Object {$commandLine.Contains($_)}).Count -gt 0}|Select-Object ProcessId,ExecutablePath)
+    if($remaining.Count -eq 0){break}
+    Start-Sleep -Milliseconds 50
+} while([DateTime]::UtcNow -lt $cleanupDeadline)
 $os=Get-CimInstance Win32_OperatingSystem
 $report=[ordered]@{executed=[DateTimeOffset]::Now.ToString('o');screen_pin_executable=$ExePath;screen_pin_sha256=(Get-FileHash -LiteralPath $ExePath).Hash;config=$configDir;system=@{caption=$os.Caption;version=$os.Version;build=$os.BuildNumber;architecture=$os.OSArchitecture};applications=$results.ToArray();screen_pin_exited=$process.HasExited;hkcu_startup_unchanged=($startupBefore -ceq $startupAfter);limitations=@('one physical display and current DPI only','ordinary application windows only; no elevated app tested','independent app profiles; existing user sessions were not operated','machine has development tools; this does not prove clean-machine deployment')}
+$report['remaining_owned_application_processes']=$remaining
+$report['cleanup_check_scope']='Owned main-process exit plus a post-close command-line scan for the unique isolated user-data directories; no process-name termination.'
 $report|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $OutputDir 'application-smoke.json') -Encoding utf8
 $report|ConvertTo-Json -Depth 12
-if(($results|Where-Object {$_.status -eq 'Failed'}).Count -gt 0 -or -not $report.hkcu_startup_unchanged){exit 1}
+if(($results|Where-Object {$_.status -eq 'Failed'}).Count -gt 0 -or -not $report.hkcu_startup_unchanged -or $remaining.Count -gt 0){exit 1}

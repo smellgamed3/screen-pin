@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$ExePath,
     [Parameter(Mandatory = $true)][string]$OutputDir,
-    [ValidateRange(20, 500)][int]$Cycles = 100
+    [ValidateRange(20, 500)][int]$Cycles = 100,
+    [string]$UiaProbePath = (Join-Path $PSScriptRoot '../target/debug/accessibility_probe.exe')
 )
 $ErrorActionPreference = 'Stop'
 $resolvedExe = (Resolve-Path -LiteralPath $ExePath).ProviderPath
@@ -211,6 +212,14 @@ try {
     if(([regex]::Matches($keyStatus,'已注册')).Count -ne 2 -or $keyStatus -match '未注册|不可用|失败|冲突'){throw ('Global hotkeys are not both available: '+$keyStatus)}
     $fixture=[PinRealKeys]::StartFixture()
     Start-Sleep -Milliseconds 120
+    if([PinRealKeys]::GetForegroundWindow() -ne $fixture){
+        $focusInput=Join-Path $runDir 'focus-input.json';$focusOutput=Join-Path $runDir 'focus-output.json'
+        ConvertTo-Json -InputObject @(@{page='activation';id=0;handle=$fixture.ToInt64()})|Set-Content -LiteralPath $focusInput -Encoding utf8
+        & $UiaProbePath $focusInput $focusOutput $PID --focus
+        $report['uia_initial_focus_result']=$LASTEXITCODE
+        if($LASTEXITCODE -ne 0){throw 'Public UIA activation could not focus the owned fixture.'}
+        Start-Sleep -Milliseconds 100
+    }
     [PinRealKeys]::AssertForeground()
     $work=[PinRealKeys]::Work()
     $report.fixture_work_area=$work

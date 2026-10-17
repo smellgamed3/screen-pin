@@ -16,7 +16,8 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::SetScrollInfo;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, GetFocus, HOT_KEY_MODIFIERS, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
+    EnableWindow, GetFocus, GetKeyState, HOT_KEY_MODIFIERS, IsWindowEnabled, MOD_NOREPEAT,
+    RegisterHotKey, SetFocus, UnregisterHotKey, VK_SHIFT, VK_TAB,
 };
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -106,6 +107,7 @@ const ID_ASSOC_PREVIEW: i32 = 309;
 const ID_ASSOC_APPLY: i32 = 310;
 const ID_ASSOC_HELP: i32 = 311;
 const ID_CREATE_ENVIRONMENT: i32 = 312;
+const ID_ASSOC_PREVIEW_LABEL: i32 = 313;
 const ID_MENU_OPEN: usize = 400;
 const ID_MENU_UNDO: usize = 401;
 const ID_MENU_ELEVATE: usize = 402;
@@ -156,6 +158,7 @@ struct Shell {
     requests: SyncSender<Request>,
     replies: Receiver<WorkerReply>,
     busy: bool,
+    operation_focus: Option<HWND>,
     exiting: bool,
     worker_failed: bool,
     registrations: Vec<Registration>,
@@ -322,6 +325,7 @@ unsafe fn run_native(
         requests: request_tx,
         replies: reply_rx,
         busy: false,
+        operation_focus: None,
         exiting: false,
         worker_failed: false,
         registrations: Vec::new(),
@@ -430,7 +434,15 @@ unsafe fn run_native(
         if result.0 <= 0 {
             break;
         }
-        if !unsafe { IsDialogMessageW(window, &message) }.as_bool() {
+        let readonly_tab = message.message == WM_KEYDOWN
+            && message.wParam.0 == VK_TAB.0 as usize
+            && SHELL.with(|state| {
+                state
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(Shell::navigate_readonly_tab)
+            });
+        if !readonly_tab && !unsafe { IsDialogMessageW(window, &message) }.as_bool() {
             unsafe {
                 let _ = TranslateMessage(&message);
                 DispatchMessageW(&message);
@@ -469,6 +481,22 @@ unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: 
 }
 
 impl Shell {
+    fn navigate_readonly_tab(&self) -> bool {
+        let focus = unsafe { GetFocus() };
+        if ![self.hwnd(ID_RESULT), self.hwnd(ID_ASSOC_PREVIEW)].contains(&focus) {
+            return false;
+        }
+        // These are selectable output fields, not document editors. Their
+        // native multiline implementation can consume Tab even when read-only.
+        let previous = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
+        if let Ok(next) = unsafe { GetNextDlgTabItem(self.window, Some(focus), previous) } {
+            unsafe {
+                let _ = SetFocus(Some(next));
+            }
+        }
+        true
+    }
+
     fn hwnd(&self, id: i32) -> HWND {
         self.controls
             .iter()
@@ -495,7 +523,13 @@ impl Shell {
     }
     fn enable(&self, id: i32, enabled: bool) {
         unsafe {
-            let _ = EnableWindow(self.hwnd(id), enabled);
+            let control = self.hwnd(id);
+            // Disabling the focused child otherwise leaves this thread with no
+            // focus window, and Windows discards subsequent keyboard input.
+            if !enabled && GetForegroundWindow() == self.window && GetFocus() == control {
+                let _ = SetFocus(Some(self.window));
+            }
+            let _ = EnableWindow(control, enabled);
         }
     }
     fn list_add(&self, id: i32, message: u32, value: &str) {
@@ -741,6 +775,13 @@ impl Shell {
             (ID_ASSOC_NEW, 3, "COMBOBOX", "", combo),
             (ID_ASSOC_SET, 3, "BUTTON", "加入对应关系(&M)", button),
             (
+                ID_ASSOC_PREVIEW_LABEL,
+                3,
+                "STATIC",
+                "关联预览与影响范围(&E)",
+                label,
+            ),
+            (
                 ID_ASSOC_PREVIEW,
                 3,
                 "EDIT",
@@ -970,6 +1011,9 @@ impl Shell {
         let restart = matches!(request, Request::RestartElevated);
         match self.requests.try_send(request) {
             Ok(()) => {
+                self.operation_focus = (unsafe { GetForegroundWindow() } == self.window)
+                    .then(|| unsafe { GetFocus() })
+                    .filter(|focus| self.controls.iter().any(|control| control.hwnd == *focus));
                 self.busy = true;
                 self.pending_restart = restart;
                 self.text(ID_RESULT, "正在处理…");
@@ -1017,12 +1061,38 @@ impl Shell {
                     self.result("后台操作意外停止。原配置保留，请退出后重新启动。", true);
                 }
             }
+            self.restore_operation_focus();
             if self.exiting {
                 unsafe {
                     PostQuitMessage(0);
                 }
             }
         }
+    }
+
+    fn restore_operation_focus(&mut self) {
+        let Some(previous) = self.operation_focus.take() else {
+            return;
+        };
+        unsafe {
+            let current = GetFocus();
+            // A user may have moved to another control or another application
+            // while the worker ran. Never override that newer focus choice.
+            if self.exiting
+                || GetForegroundWindow() != self.window
+                || (!current.is_invalid() && current != self.window)
+            {
+                return;
+            }
+            let target =
+                if IsWindowVisible(previous).as_bool() && IsWindowEnabled(previous).as_bool() {
+                    previous
+                } else {
+                    self.hwnd(ID_PAGE_MAIN)
+                };
+            let _ = SetFocus(Some(target));
+        }
+        self.ensure_focus_visible();
     }
 
     fn refresh_controls(&mut self) {
@@ -2649,7 +2719,8 @@ impl Shell {
             self.place(ID_ASSOC_NEW_LABEL, margin, y + row * 6 + 24, width, row);
             self.place(ID_ASSOC_NEW, margin, y + row * 7 + 24, width, row * 7);
             self.place(ID_ASSOC_SET, margin, y + row * 8 + 32, 200, row);
-            self.place(ID_ASSOC_PREVIEW, margin, y + row * 9 + 40, width, row * 5);
+            self.place(ID_ASSOC_PREVIEW_LABEL, margin, y + row * 9 + 40, width, row);
+            self.place(ID_ASSOC_PREVIEW, margin, y + row * 10 + 40, width, row * 4);
             self.place(ID_ASSOC_APPLY, margin, y + row * 14 + 48, 280, row);
             self.place(ID_ASSOC_HELP, margin, y + row * 15 + 56, width, row * 2);
             self.place(ID_CREATE_ENVIRONMENT, margin, y + row * 17 + 64, 280, row);
@@ -2831,6 +2902,7 @@ mod tests {
                 requests,
                 replies,
                 busy: false,
+                operation_focus: None,
                 exiting: false,
                 worker_failed: false,
                 registrations: vec![],
