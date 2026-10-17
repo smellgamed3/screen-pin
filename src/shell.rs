@@ -6,11 +6,12 @@ use std::collections::HashMap;
 use std::mem::size_of;
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::time::{Duration, Instant};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     COLOR_BTNFACE, ClientToScreen, CreateFontIndirectW, CreateRectRgn, DEFAULT_GUI_FONT,
-    DeleteObject, GetMonitorInfoW, GetStockObject, HBRUSH, HFONT, MONITOR_DEFAULTTONEAREST,
-    MONITORINFO, MonitorFromWindow, SetWindowRgn,
+    DeleteObject, GetDC, GetMonitorInfoW, GetStockObject, GetTextExtentPoint32W, HBRUSH, HFONT,
+    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, ReleaseDC, SelectObject,
+    SetWindowRgn,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::SetScrollInfo;
@@ -560,18 +561,60 @@ impl Shell {
         self.send(id, message, 0, wide(value).as_ptr() as isize);
         if message == LB_ADDSTRING {
             let current = self.send(id, LB_GETHORIZONTALEXTENT, 0, 0);
-            let extent = (value
-                .chars()
-                .map(|c| if c.is_ascii() { 0.52 } else { 1.0 })
-                .sum::<f64>()
-                * f64::from(self.row - 12)
-                * self.scale
-                + 24.0)
-                .ceil() as isize;
+            let extent = self.list_text_extent(id, value);
             if extent > current {
                 self.send(id, LB_SETHORIZONTALEXTENT, extent as usize, 0);
             }
         }
+    }
+    fn list_text_extent(&self, id: i32, value: &str) -> isize {
+        let text = wide(value);
+        let padding = (8.0 * self.scale).ceil() as isize;
+        // A conservative fallback keeps labels reachable if a DC/font cannot be acquired.
+        let fallback = (text.len() as f64 * f64::from(self.row) * self.scale).ceil() as isize;
+        let hwnd = self.hwnd(id);
+        unsafe {
+            let dc = GetDC(Some(hwnd));
+            if dc.is_invalid() {
+                return fallback + padding;
+            }
+            let previous = SelectObject(dc, self.control_font(id).into());
+            let mut size = SIZE::default();
+            let measured = !previous.is_invalid()
+                && GetTextExtentPoint32W(dc, &text[..text.len() - 1], &mut size).as_bool();
+            if !previous.is_invalid() {
+                SelectObject(dc, previous);
+            }
+            ReleaseDC(Some(hwnd), dc);
+            if measured {
+                size.cx.max(0) as isize + padding
+            } else {
+                fallback + padding
+            }
+        }
+    }
+    fn reset_list(&self, id: i32) {
+        self.send(id, LB_RESETCONTENT, 0, 0);
+        self.send(id, LB_SETHORIZONTALEXTENT, 0, 0);
+    }
+    fn remeasure_list(&self, id: i32) {
+        if self.hwnd(id).is_invalid() {
+            return;
+        }
+        let mut extent = 0;
+        for index in 0..self.send(id, LB_GETCOUNT, 0, 0).max(0) as usize {
+            let length = self.send(id, LB_GETTEXTLEN, index, 0);
+            if length < 0 {
+                continue;
+            }
+            let mut text = vec![0; length as usize + 1];
+            let used = self.send(id, LB_GETTEXT, index, text.as_mut_ptr() as isize);
+            if used >= 0 {
+                let text = String::from_utf16_lossy(&text[..(used as usize).min(text.len())]);
+                extent = extent.max(self.list_text_extent(id, &text));
+            }
+        }
+        self.send(id, LB_SETHORIZONTALEXTENT, extent as usize, 0);
     }
     fn selection(&self, id: i32, combo: bool) -> Option<usize> {
         let index = self.send(id, if combo { CB_GETCURSEL } else { LB_GETCURSEL }, 0, 0);
@@ -920,6 +963,9 @@ impl Shell {
             self.section_font = self.font;
         }
         self.apply_fonts();
+        for id in [ID_WINDOWS, ID_PRESETS] {
+            self.remeasure_list(id);
+        }
         unsafe {
             if previous.2 != previous.0 && !previous.2.is_invalid() {
                 let _ = DeleteObject(previous.2.into());
@@ -1318,7 +1364,7 @@ impl Shell {
             )
         };
         self.text(ID_ENV, &env);
-        self.send(ID_WINDOWS, LB_RESETCONTENT, 0, 0);
+        self.reset_list(ID_WINDOWS);
         for window in &self.view.windows {
             self.list_add(
                 ID_WINDOWS,
@@ -1358,7 +1404,7 @@ impl Shell {
     fn rebuild_presets(&mut self) {
         let selected_id = self.editor.as_ref().map(|e| e.preset.id.clone());
         self.rows.clear();
-        self.send(ID_PRESETS, LB_RESETCONTENT, 0, 0);
+        self.reset_list(ID_PRESETS);
         if let Some(profile) = self
             .selected_profile
             .as_ref()

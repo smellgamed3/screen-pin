@@ -1,5 +1,7 @@
 # 阶段 17：阅读层级、固定导航与操作反馈
 
+历史记录：本文对应 A0F8A180 构建，下面保留当时截图和执行证据。当前构建与回归见 [阶段 18](phase-18.md)，需求状态见 [覆盖审计](coverage.md)。
+
 日期：2026-10-17（Asia/Shanghai）。按用户“完成后再优化外观和交互”的顺序，在阶段 15／16 已发现的配置读写缺陷修复并通过回归后，开始第一轮界面打磨。尚缺设备或人工条件的整体验收继续保留，不因进入本阶段而视为完成。
 
 ## 界面与交互
@@ -35,7 +37,7 @@
 | 工件 | SHA256 |
 | --- | --- |
 | Release EXE | `A0F8A180A7D812D0D7668E4B4B35C6C6471D8AA178F060778FE78BA300A0C334` |
-| [ZIP](../../dist/ScreenPin-0.1.0-windows-x64.zip) | `A2034AE05FBC93871C93AC4F6C6040CB08B3B9FE805A5047F52F7AF8764124D6` |
+| [历史 ZIP 校验记录](../../artifacts/packages/package-753d083f405440948bd75cb1366c32ee/package-verification.json) | `A2034AE05FBC93871C93AC4F6C6040CB08B3B9FE805A5047F52F7AF8764124D6` |
 
 本构建 **18 项集成回归全部通过**；[顺序、参数与退出码](../../artifacts/validation/phase-17-suite.json)、[原始报告索引](../../artifacts/validation/phase-17-evidence-index.json) 已与当前 EXE 哈希核对。
 
