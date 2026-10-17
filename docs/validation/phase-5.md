@@ -17,7 +17,7 @@
 | Brave | 155.1.97.59 | 20 | 0 px | [精度报告](../../artifacts/apps-phase-5-precision/application-smoke.json) |
 | VS Code | 1.130.0 | 20 | 0 px | [精度报告](../../artifacts/apps-phase-5-precision/application-smoke.json) |
 | Explorer | 文件版本 10.0.26100.8875 | 20 | 0 px | [系统应用报告](../../artifacts/shell-apps/shell-apps-e155a5821f224827873c8b83b86fdce5/report.json) |
-| Windows Terminal | 文件版本 1.24.261001001；包版本 1.24.12741.0 | 20 | 0 px | [系统应用报告](../../artifacts/shell-apps/shell-apps-e155a5821f224827873c8b83b86fdce5/report.json) |
+| Windows Terminal | 产品版本 1.24.261001001；包版本 1.24.12741.0 | 20 | 0 px | [系统应用报告](../../artifacts/shell-apps/shell-apps-e155a5821f224827873c8b83b86fdce5/report.json) |
 
 每款应用以第 1 次循环前的实际 DWM 可见边界作为固定基准，之后每轮“捕获当前位置 → 确认捕获成功或同值无变化 → 实际位移并改尺寸 → 恢复”。**80 次循环均通过**，各轮原始边界保留在报告；不会逐轮重置基准来掩盖累计漂移。每次恢复均确认成功反馈、前台保持和配置文件字节哈希不变。相同位置的捕获允许走合法 no-op 路径。
 

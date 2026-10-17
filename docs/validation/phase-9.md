@@ -2,6 +2,8 @@
 
 日期：2026-10-17（Asia/Shanghai）。本轮补齐 [启动验收](../acceptance.md) 的本机证据：测量真实托盘和两枚热键可用，以及首次主界面实际完成键盘捕获的时间。产品源码未修改，沿用 [阶段 8](phase-8.md) 的构建和完整回归。
 
+同一构建的 Explorer／Terminal 状态与动态标题真实热键补证见 [阶段 10](phase-10.md)。
+
 ## 工件与环境
 
 执行的是 [当前 ZIP 校验目录中的解压 EXE](../../artifacts/packages/package-50f845177bea46c9b53af3a567f110ce/extracted/screen-pin.exe)，与 Release 相同：
