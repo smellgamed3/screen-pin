@@ -2716,6 +2716,17 @@ impl Shell {
         let gap = 12;
         let row = self.row;
         let width = (width - 2 * margin).max(360);
+        let geometry_label = [ID_X_LABEL, ID_Y_LABEL, ID_WIDTH_LABEL, ID_HEIGHT_LABEL]
+            .iter()
+            .map(|id| self.label_width(*id, 0))
+            .max()
+            .unwrap_or(0);
+        let geometry_columns = if (width - 3 * gap) / 4 >= geometry_label {
+            4
+        } else {
+            2
+        };
+        let geometry_extra = (4 / geometry_columns - 1) * (row * 2 + gap);
         let has_editor = self.editor.is_some();
         let has_rule_preview = !self.value(ID_RULE).trim().is_empty();
         let rule_preview_height = if has_rule_preview { row * 2 + 8 } else { 0 };
@@ -2729,7 +2740,7 @@ impl Shell {
         let end = if self.page == PAGE_MAIN {
             row + 24
                 + if has_editor {
-                    row * 26 + 62 + preview_height
+                    row * 26 + 62 + preview_height + geometry_extra
                 } else {
                     row * 16 + 24 + preview_height
                 }
@@ -2844,12 +2855,15 @@ impl Shell {
                 row * 7,
             );
             self.place(ID_ENV, margin, y + row * 3 + 4, width, row * 2);
-            let left = (width - gap) / 2;
+            let preset_width = self
+                .label_width(ID_PRESETS_LABEL, (width - gap) / 2)
+                .min(width * 2 / 3);
+            let left = width - gap - preset_width;
             let right = margin + left + gap;
             self.place(ID_WINDOWS_LABEL, margin, y + row * 5, left, row);
-            self.place(ID_PRESETS_LABEL, right, y + row * 5, left, row);
+            self.place(ID_PRESETS_LABEL, right, y + row * 5, preset_width, row);
             self.place(ID_WINDOWS, margin, y + row * 6, left, row * 4);
-            self.place(ID_PRESETS, right, y + row * 6, left, row * 4);
+            self.place(ID_PRESETS, right, y + row * 6, preset_width, row * 4);
             self.place(ID_REFRESH, margin, y + row * 10 + 6, left, row);
             self.place(ID_MATCH, margin, y + row * 11 + 12, width, row * 2);
             let half = (width - gap) / 2;
@@ -2901,7 +2915,7 @@ impl Shell {
                 width - display_label - 10,
                 row * 7,
             );
-            let cell = (width - 3 * gap) / 4;
+            let cell = (width - (geometry_columns - 1) * gap) / geometry_columns;
             for (i, (label, edit)) in [
                 (ID_X_LABEL, ID_X),
                 (ID_Y_LABEL, ID_Y),
@@ -2911,23 +2925,28 @@ impl Shell {
             .iter()
             .enumerate()
             {
-                let x = margin + i as i32 * (cell + gap);
-                self.place(*label, x, editor_y + row * 18 + 30, cell, row);
-                self.place(*edit, x, editor_y + row * 19 + 30, cell, row);
+                let x = margin + (i as i32 % geometry_columns) * (cell + gap);
+                let grid_y = (i as i32 / geometry_columns) * (row * 2 + gap);
+                self.place(*label, x, editor_y + row * 18 + 30 + grid_y, cell, row);
+                self.place(*edit, x, editor_y + row * 19 + 30 + grid_y, cell, row);
             }
+            let editor_y = editor_y + geometry_extra;
             self.place(ID_MAXIMIZED, margin, editor_y + row * 20 + 36, width, row);
+            let keyword_label = self
+                .label_width(ID_EDIT_KEYWORD_LABEL, half)
+                .min(width * 2 / 3);
             self.place(
                 ID_EDIT_KEYWORD_LABEL,
                 margin,
                 editor_y + row * 21 + 40,
-                half,
+                keyword_label,
                 row,
             );
             self.place(
                 ID_EDIT_KEYWORD,
-                margin + half + gap,
+                margin + keyword_label + gap,
                 editor_y + row * 21 + 40,
-                half,
+                width - keyword_label - gap,
                 row,
             );
             let b = (width - 3 * gap) / 4;

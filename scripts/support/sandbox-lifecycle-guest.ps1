@@ -37,7 +37,7 @@ public static class PinGuestLife {
  function Wait-Life([scriptblock]$test,[string]$name,[int]$seconds=60){$end=[DateTime]::UtcNow.AddSeconds($seconds);do{try{if(& $test){return}}catch{if($_.Exception.Message -notmatch 'Timed out reading own app result'){throw}};Start-Sleep -Milliseconds 100}while([DateTime]::UtcNow -lt $end);throw ('Lifecycle timeout: '+$name)}
  function Ready-Life {Wait-Life {([regex]::Matches([PinRealKeys]::Text($settings,208),'已注册')).Count -eq 2 -and [PinRealKeys]::Enabled($settings,$process.Id,207)} 'hotkeys and operation slot ready'}
  function Tray-Life {$r=[PinGuestLife+Rect]::new();$hr=[PinGuestLife]::Tray($hostWindow,[ref]$r);return @{hresult=$hr;rect=$r}}
- function Set-Autostart([bool]$enabled){Command-Guest 101;[PinApplication]::SendMessageW([PinApplication]::GetDlgItem($settings,206),0xf1,[IntPtr][int]$enabled,[IntPtr]::Zero)|Out-Null;Command-Guest 207;Wait-Life {$c=Get-Content -LiteralPath $configPath -Raw -Encoding utf8|ConvertFrom-Json;return $c.settings.autostart -eq $enabled} 'saved autostart choice'}
+ function Set-Autostart([bool]$enabled){Command-Guest 101;[PinApplication]::SendMessageW([PinApplication]::GetDlgItem($settings,206),0xf1,[IntPtr][int]$enabled,[IntPtr]::Zero)|Out-Null;Command-Guest 207;Wait-Life {$c=Read-GuestConfig;return $c.settings.autostart -eq $enabled} 'saved autostart choice'}
  function Restore-Life($placement,[string]$name){
   $focusEnd=[DateTime]::UtcNow.AddSeconds(10);$focusError=$null;do{try{Focus-Fixture;$focusError=$null;break}catch{$focusError=$_;Start-Sleep -Milliseconds 200}}while([DateTime]::UtcNow -lt $focusEnd);if($focusError){throw $focusError};$m=[PinApplication+Monitor]::new();$m.Size=[Runtime.InteropServices.Marshal]::SizeOf($m);if(-not [PinApplication]::GetMonitorInfoW([PinApplication]::MonitorFromWindow($fixture,2),[ref]$m)){throw 'Guest work area unavailable'}
   $w=$m.Work.Right-$m.Work.Left;$h=$m.Work.Bottom-$m.Work.Top;$wanted=[PinApplication+Rect]::new();$wanted.Left=$m.Work.Left+[Math]::Round($placement.rect.x*$w);$wanted.Top=$m.Work.Top+[Math]::Round($placement.rect.y*$h);$wanted.Right=$wanted.Left+[Math]::Round($placement.rect.width*$w);$wanted.Bottom=$wanted.Top+[Math]::Round($placement.rect.height*$h)
@@ -54,7 +54,7 @@ public static class PinGuestLife {
   Assert-Guest ($startupBefore -eq $null) 'Guest autostart is initially absent'
   $fixture=[PinRealKeys]::StartFixture();Focus-Fixture;[PinRealKeys]::FixtureTitle('Screen Pin lifecycle '+$expected.run_id);Move-Fixture 90 100 380 280
   [PinRealKeys]::Chord(0x79);Wait-Life {(Test-Path -LiteralPath $configPath) -and (Status-Guest) -match '^已记住'} 'seed real F10 capture' 10
-  $c=Get-Content -LiteralPath $configPath -Raw -Encoding utf8|ConvertFrom-Json;$placement=$c.profiles[0].applications[0].default.placement
+  $c=Read-GuestConfig;$placement=$c.profiles[0].applications[0].default.placement
   Wait-Life {$tray=Tray-Life;$tray.hresult -eq 0 -and $tray.rect.Right -gt $tray.rect.Left -and $tray.rect.Bottom -gt $tray.rect.Top} 'initial tray icon rectangle';$trayBefore=Tray-Life;$appPidBefore=$process.Id;$configHash=(Get-FileHash -LiteralPath $configPath).Hash
   $shellPid=[PinGuestLife]::ShellPid();$shellProcess=Get-Process -Id $shellPid;$shellOwner=Get-CimInstance Win32_Process -Filter ('ProcessId='+$shellPid)
   Assert-Guest ($shellOwner.ExecutablePath -ieq (Join-Path $env:WINDIR 'explorer.exe') -and $shellProcess.SessionId -eq (Get-Process -Id $PID).SessionId) 'Only the current guarded guest shell is selected for restart'

@@ -17,14 +17,6 @@ try{
  foreach($name in @('real-keys.cs','application-native.cs','viewport-native.cs','desktop-keyboard.cs','guest-appearance.cs')){Add-Type -Path (Join-Path $InputDir $name)}
  Add-Type -AssemblyName System.Drawing;Add-Type -AssemblyName UIAutomationClient
  $oldDpi=[PinApplication]::SetThreadDpiAwarenessContext([IntPtr](-4))
- $savedTheme=[Environment]::ExpandEnvironmentVariables((Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes').CurrentTheme);$report['initial_theme']=$savedTheme;$savedMetrics=[PinGuestAppearance]::ReadMetrics();$savedContrast=[PinGuestAppearance]::ReadContrast()
- $savedColors=@([PinGuestAppearance]::GetSysColor(5),[PinGuestAppearance]::GetSysColor(8),[PinGuestAppearance]::GetSysColor(15),[PinGuestAppearance]::GetSysColor(18));$report['initial_colors']=$savedColors;$report['initial_metrics']=$savedMetrics;$report['initial_contrast']=$savedContrast;$report['environment']=@{os=(Get-CimInstance Win32_OperatingSystem).Caption;build=[Environment]::OSVersion.Version.ToString();user=$identity.Name;computer=$env:COMPUTERNAME}
- $appDir=Join-Path $env:LOCALAPPDATA ('ScreenPin-Appearance-'+$expected.run_id);New-Item -ItemType Directory -Path $appDir|Out-Null;Expand-Archive -LiteralPath (Join-Path $InputDir 'ScreenPin.zip') -DestinationPath $appDir
- $script:exePath=(Get-Item -LiteralPath (Join-Path $appDir 'screen-pin.exe')).FullName;$report['exe_sha256']=(Get-FileHash -LiteralPath $exePath).Hash
- Assert-Guest ($report.exe_sha256 -eq $expected.exe_sha256) 'Appearance executable matches release'
- Start-GuestApp;Wait-Guest {[PinApplication]::IsWindowVisible($settings)} 'first appearance UI'
- $fixture=[PinRealKeys]::StartFixture();Focus-Fixture;[PinRealKeys]::FixtureTitle('Screen Pin appearance '+$expected.run_id);Move-Fixture 80 90 380 280
- [PinRealKeys]::Chord(0x79);Wait-Guest {(Status-Guest) -match '^已记住'} 'initial actual capture';$baseline=Frame-Guest;Command-Guest 109;[PinRealKeys]::SelectWindow($settings,$process.Id,('Screen Pin appearance '+$expected.run_id));[PinViewport]::Message([PinViewport]::GetDlgItem($settings,117),$process.Id,0x186,0);Command-Guest (65536+117);$configHash=(Get-FileHash -LiteralPath $configPath).Hash;$savedConfig=Get-Content -LiteralPath $configPath -Raw -Encoding utf8|ConvertFrom-Json;$expectedUndoTarget=$savedConfig.profiles[0].name+' · '+$savedConfig.profiles[0].applications[0].app_name+' · 应用默认（同应用窗口共用）'
  function Focus-Fixture {[PinGuestAppearance]::Activate($fixture,$PID);[PinRealKeys]::AssertForeground()}
  function Focus-Appearance {
   [PinApplication]::ShowWindow($settings,9)|Out-Null
@@ -64,7 +56,7 @@ try{
  function Keyboard-Appearance([string]$name){
   Focus-Appearance;$wanted=@([PinViewport]::TabIds($settings));$seen=@{};foreach($reverse in @($false,$true)){
    for($i=0;$i -le $wanted.Count;$i++){
-    $before=[PinDesktopKeyboard]::FocusId($settings,$process.Id);[PinDesktopKeyboard]::Press($settings,$process.Id,9,$(if($reverse){16}else{0}));Wait-Guest {[PinDesktopKeyboard]::FocusId($settings,$process.Id) -ne $before} 'appearance Tab focus';Start-Sleep -Milliseconds 30
+    $before=[PinDesktopKeyboard]::FocusId($settings,$process.Id);$transitions=[Collections.Generic.List[int]]::new();[PinDesktopKeyboard]::Press($settings,$process.Id,9,$(if($reverse){16}else{0}));try{Wait-Guest {$candidate=[PinDesktopKeyboard]::FocusId($settings,$process.Id);if($transitions.Count -eq 0 -or $transitions[$transitions.Count-1] -ne $candidate){$transitions.Add($candidate)};$candidate -ne $before -and $wanted -contains $candidate} 'appearance Tab focus on an enabled control'}catch{$report['focus_failure']=@{scene=$name;before=$before;reverse=$reverse;transitions=@($transitions);chain=[PinDesktopKeyboard]::FocusChain($settings,$process.Id)};throw};Start-Sleep -Milliseconds 30
     $id=[PinDesktopKeyboard]::FocusId($settings,$process.Id);$r=[PinViewport]::Bounds([PinViewport]::GetDlgItem($settings,$id));$client=[PinViewport]::Client($settings)
     $box=@([PinViewport]::Content($settings)|Where-Object {$_.id -eq $id});$complete=$r.Left -ge $client.Left -and $r.Top -ge $client.Top -and $r.Right -le $client.Right -and $r.Bottom -le $client.Bottom
     if($box.Count -eq 1){$v=$box[0].visible;$complete=$complete -and $v.Left -eq $r.Left -and $v.Top -eq $r.Top -and $v.Right -eq $r.Right -and $v.Bottom -eq $r.Bottom}
@@ -72,15 +64,28 @@ try{
      $h=[PinViewport]::GetDlgItem($settings,144);$text=[PinRealKeys]::Text($settings,144)
      Assert-Guest ($text -ceq $expectedUndoTarget -and [PinGuestAppearance]::ReadOnlyEdit($h)) 'Undo target preserves its complete scope in a read-only field'
      [PinDesktopKeyboard]::Press($settings,$process.Id,0x23,0);Start-Sleep -Milliseconds 30;$end=[PinGuestAppearance]::FirstVisibleCharacter($h)
-     if([PinGuestAppearance]::TextWidth($h,$text) -gt $r.Right-$r.Left){Assert-Guest ($end -gt 0) 'End reveals the tail of a long Undo target'}
-     [PinDesktopKeyboard]::Press($settings,$process.Id,0x24,0);Start-Sleep -Milliseconds 30;$home=[PinGuestAppearance]::FirstVisibleCharacter($h);Assert-Guest ($home -eq 0 -and [PinRealKeys]::Text($settings,144) -ceq $text) 'Home reveals the beginning without changing Undo scope'
-     $report.undo_context+=@{scene=$name;reverse=$reverse;text=$text;first_after_end=$end;first_after_home=$home}
+     $selection=[PinGuestAppearance]::Selection($h);$first=[PinGuestAppearance]::CharacterPosition($h,0);$last=[PinGuestAppearance]::CharacterPosition($h,$text.Length-1);$editClient=[PinViewport]::Client($h);$lastWidth=[PinGuestAppearance]::TextWidth($h,$text.Substring($text.Length-1))
+     $endVisible=$selection[0] -eq $text.Length -and $selection[1] -eq $text.Length -and $last[0] -ge 0 -and $last[0]+$lastWidth -le $editClient.Right-$editClient.Left -and $last[1] -ge 0 -and $last[1] -lt $editClient.Bottom-$editClient.Top
+     if([PinGuestAppearance]::TextWidth($h,$text) -gt $r.Right-$r.Left){$endVisible=$endVisible -and $first[0] -lt 0}
+     $report.undo_context+=@{scene=$name;phase='after-End';reverse=$reverse;text=$text;first_visible_query=$end;first_character=$first;last_character=$last;last_character_width=$lastWidth;client=$editClient;selection=$selection;tail_visible=$endVisible}
+     if(-not $endVisible){Image-Appearance ($name+'-End-failure')};Assert-Guest $endVisible 'End reveals the complete tail of the Undo target'
+     [PinDesktopKeyboard]::Press($settings,$process.Id,0x24,0);Start-Sleep -Milliseconds 30;$firstAfterHome=[PinGuestAppearance]::FirstVisibleCharacter($h);$first=[PinGuestAppearance]::CharacterPosition($h,0);$selection=[PinGuestAppearance]::Selection($h)
+     Assert-Guest ($selection[0] -eq 0 -and $selection[1] -eq 0 -and $first[0] -ge 0 -and $first[0] -lt $editClient.Right-$editClient.Left -and [PinRealKeys]::Text($settings,144) -ceq $text) 'Home reveals the beginning without changing Undo scope'
+     $report.undo_context+=@{scene=$name;phase='after-Home';reverse=$reverse;text=$text;first_visible_query=$firstAfterHome;first_character=$first;selection=$selection}
     }
-    $report.focus+=@{scene=$name;id=$id;reverse=$reverse;fully_visible=$complete;bounds=$r};Assert-Guest $complete ($name+': focused '+$id+' fully visible');$seen[$id]=$true
+    $report.focus+=@{scene=$name;id=$id;reverse=$reverse;fully_visible=$complete;bounds=$r;transitions=@($transitions)};Assert-Guest $complete ($name+': focused '+$id+' fully visible');$seen[$id]=$true
    }
   }
   foreach($id in $wanted){Assert-Guest ($seen.ContainsKey($id)) ($name+': enabled Tab stop '+$id+' reached')}
  }
+ $savedTheme=[Environment]::ExpandEnvironmentVariables((Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes').CurrentTheme);$report['initial_theme']=$savedTheme;$savedMetrics=[PinGuestAppearance]::ReadMetrics();$savedContrast=[PinGuestAppearance]::ReadContrast()
+ $savedColors=@([PinGuestAppearance]::GetSysColor(5),[PinGuestAppearance]::GetSysColor(8),[PinGuestAppearance]::GetSysColor(15),[PinGuestAppearance]::GetSysColor(18));$report['initial_colors']=$savedColors;$report['initial_metrics']=$savedMetrics;$report['initial_contrast']=$savedContrast;$report['environment']=@{os=(Get-CimInstance Win32_OperatingSystem).Caption;build=[Environment]::OSVersion.Version.ToString();user=$identity.Name;computer=$env:COMPUTERNAME}
+ $appDir=Join-Path $env:LOCALAPPDATA ('ScreenPin-Appearance-'+$expected.run_id);New-Item -ItemType Directory -Path $appDir|Out-Null;Expand-Archive -LiteralPath (Join-Path $InputDir 'ScreenPin.zip') -DestinationPath $appDir
+ $script:exePath=(Get-Item -LiteralPath (Join-Path $appDir 'screen-pin.exe')).FullName;$report['exe_sha256']=(Get-FileHash -LiteralPath $exePath).Hash
+ Assert-Guest ($report.exe_sha256 -eq $expected.exe_sha256) 'Appearance executable matches release'
+ Start-GuestApp;Wait-Guest {[PinApplication]::IsWindowVisible($settings)} 'first appearance UI'
+ $fixture=[PinRealKeys]::StartFixture();Focus-Fixture;[PinRealKeys]::FixtureTitle('Screen Pin appearance '+$expected.run_id);Move-Fixture 80 90 380 280
+ [PinRealKeys]::Chord(0x79);Wait-Guest {(Status-Guest) -match '^已记住'} 'initial actual capture';$baseline=Frame-Guest;Command-Guest 109;[PinRealKeys]::SelectWindow($settings,$process.Id,('Screen Pin appearance '+$expected.run_id));[PinViewport]::Message([PinViewport]::GetDlgItem($settings,117),$process.Id,0x186,0);Command-Guest (65536+117);$configHash=(Get-FileHash -LiteralPath $configPath).Hash;$savedConfig=Get-Content -LiteralPath $configPath -Raw -Encoding utf8|ConvertFrom-Json;$expectedUndoTarget=$savedConfig.profiles[0].name+' · '+$savedConfig.profiles[0].applications[0].app_name+' · 应用默认（同应用窗口共用）'
  # Cover every one-row STATIC caption, plus the fixed page and Undo buttons.
  # Keep multiline copy and scrollable edit/list contents in their separate checks.
  $singleRowLabels=@{

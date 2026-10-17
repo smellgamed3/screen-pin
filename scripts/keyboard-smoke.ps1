@@ -189,7 +189,7 @@ try {
  Names-Keyboard @(100,101,102,302,303,305,307,308,309,310,312,136,138,144) 'association'
  Tabs-Keyboard 'association'
  foreach($item in $report.uia){
-  $expectedRole=if($item.id -in @(105,120,302,305,307)){50003}elseif($item.id -in @(108,117)){50008}elseif($item.id -in @(129,206)){50002}elseif($item.id -in @(114,122,124,126,128,131,138,202,204,210,309)){50004}else{50000}
+  $expectedRole=if($item.id -in @(105,120,302,305,307)){50003}elseif($item.id -in @(108,117)){50008}elseif($item.id -in @(129,206)){50002}elseif($item.id -in @(114,122,124,126,128,131,138,144,202,204,210,309)){50004}else{50000}
   Assert-Keyboard (-not [string]::IsNullOrWhiteSpace($item.name) -and $item.type -eq $expectedRole) ('Native UIA control '+$item.id+' exposes a name and native role on '+$item.page)
  }
  $startupAfter=[Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run','ScreenPin',$null)

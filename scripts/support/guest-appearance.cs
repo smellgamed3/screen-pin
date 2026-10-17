@@ -22,6 +22,8 @@ public static class PinGuestAppearance {
  [DllImport("user32.dll",EntryPoint="GetWindowLongPtrW")]private static extern IntPtr GetWindowLongPtrW(IntPtr h,int index);
  public static bool ReadOnlyEdit(IntPtr h){return (GetWindowLongPtrW(h,-16).ToInt64()&0x800)!=0;}
  public static int FirstVisibleCharacter(IntPtr h){UIntPtr value;if(SendMessageTimeoutW(h,0xce,IntPtr.Zero,IntPtr.Zero,0x23,500,out value)==IntPtr.Zero)throw new InvalidOperationException("Owned edit scroll query timed out");return (int)value.ToUInt64();}
+ public static int[] Selection(IntPtr h){UIntPtr value;if(SendMessageTimeoutW(h,0xb0,IntPtr.Zero,IntPtr.Zero,0x23,500,out value)==IntPtr.Zero)throw new InvalidOperationException("Owned edit selection query timed out");var packed=value.ToUInt64();return new[]{(int)(packed&0xffff),(int)((packed>>16)&0xffff)};}
+ public static int[] CharacterPosition(IntPtr h,int index){UIntPtr value;if(SendMessageTimeoutW(h,0xd6,new IntPtr(index),IntPtr.Zero,0x23,500,out value)==IntPtr.Zero)throw new InvalidOperationException("Owned edit character position query timed out");var packed=value.ToUInt64();if((uint)packed==uint.MaxValue)throw new InvalidOperationException("Owned edit character index is unavailable");return new[]{(int)(short)(packed&0xffff),(int)(short)((packed>>16)&0xffff)};}
  public static int TextWidth(IntPtr window,string text){
   UIntPtr handle;if(SendMessageTimeoutW(window,0x31,IntPtr.Zero,IntPtr.Zero,0x23,500,out handle)==IntPtr.Zero)throw new InvalidOperationException("Owned font query timed out");
   Font font;if(GetObjectW(new IntPtr((long)handle.ToUInt64()),Marshal.SizeOf(typeof(Font)),out font)==0)throw new InvalidOperationException("Owned font metadata unavailable");

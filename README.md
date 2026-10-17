@@ -58,4 +58,4 @@ cargo run --locked --bin desktop_probe -- --output artifacts/desktop-probe.json
 
 隔离来宾中的真实 Explorer 重启、开机启动登记与路径修复验证见 [阶段 21](docs/validation/phase-21.md)。系统重启登录仍待验证。
 
-系统大字体／高对比度实测及当前文字截断问题见 [阶段 22](docs/validation/phase-22.md)。`scripts/sandbox-smoke.ps1 -Appearance` 包含阅读门槛，阶段 22 的 B141 构建会明确报告该门槛失败。阶段 23 的新候选已实现修复，回归与独立首次使用结果待补齐，详见[当前进展](docs/validation/phase-23.md)。
+系统大字体／高对比度的原始文字截断问题见 [阶段 22](docs/validation/phase-22.md)。`scripts/sandbox-smoke.ps1 -Appearance` 包含阅读门槛；阶段 23 最新候选通过了扩展后的 216 个单行文字样本、键盘及真实恢复检查。完整集成回归仍在进行；用户已反馈保存／恢复正常，独立首次使用计时仍待证明，详见[当前进展](docs/validation/phase-23.md)。

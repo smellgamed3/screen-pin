@@ -11,6 +11,11 @@ function Wait-Guest([scriptblock]$test,[string]$name){$deadline=[DateTime]::UtcN
 function Frame-Guest {$r=[PinApplication+Rect]::new();if([PinApplication]::DwmGetWindowAttribute($fixture,9,[ref]$r,16) -ne 0){throw 'Own fixture DWM frame unavailable'};return $r}
 function Error-Guest($a,$b){$value=0;foreach($edge in @('Left','Top','Right','Bottom')){$value=[Math]::Max($value,[Math]::Abs($a.$edge-$b.$edge))};return $value}
 function Status-Guest {[PinRealKeys]::Text($settings,138)}
+function Read-GuestConfig {
+ # Observers must permit the application's atomic replacement of this file.
+ $stream=[IO.File]::Open($configPath,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+ try{$reader=[IO.StreamReader]::new($stream,[Text.Encoding]::UTF8,$true);try{return ($reader.ReadToEnd()|ConvertFrom-Json)}finally{$reader.Dispose()}}finally{$stream.Dispose()}
+}
 function Command-Guest([int]$id){[PinRealKeys]::Command($settings,$process.Id,$id);Wait-Guest {(Status-Guest) -notmatch '^正在处理'} ('GUI '+$id)}
 function Focus-Fixture {
  if([PinRealKeys]::GetForegroundWindow() -ne $fixture){
@@ -67,7 +72,8 @@ try{
  $report['first_visible_ms']=$launchWatch.Elapsed.TotalMilliseconds
  Assert-Guest ([PinApplication]::IsWindowVisible($settings)) 'First default launch automatically displays the configuration UI'
  Assert-Guest (Test-Path -LiteralPath $configPath) 'Default LOCALAPPDATA configuration is created in the guest profile'
- $keys=[PinRealKeys]::Text($settings,208);Assert-Guest (([regex]::Matches($keys,'已注册')).Count -eq 2) 'Both default hotkeys are registered in the clean guest'
+ Wait-Guest {$script:initialKeyStatus=[PinRealKeys]::Text($settings,208);([regex]::Matches($initialKeyStatus,'已注册')).Count -eq 2} 'both default hotkeys report ready'
+ Assert-Guest (([regex]::Matches($initialKeyStatus,'已注册')).Count -eq 2) 'Both default hotkeys are registered in the clean guest'
  $report['guest_dpi']=[PinApplication]::GetDpiForWindow($settings)
  $unexpected=@($process.Modules|Where-Object {$_.FileName -ine $exePath -and -not $_.FileName.StartsWith($env:WINDIR+'\',[StringComparison]::OrdinalIgnoreCase)}|ForEach-Object FileName)
  $report['non_windows_modules']=$unexpected;Assert-Guest ($unexpected.Count -eq 0) 'Running release loads no modules outside its executable and Windows directories'
@@ -76,13 +82,13 @@ try{
  $report['target_monitor']=@{bounds=$monitor.Bounds;work=$monitor.Work;device=$monitor.Device}
  $x=$monitor.Work.Left;$y=$monitor.Work.Top
  Move-Fixture ($x+50) ($y+70) 360 260;$guiBaseline=Frame-Guest;Command-Guest 109;[PinRealKeys]::SelectWindow($settings,$process.Id,$title);Command-Guest 111
- $config=Get-Content -LiteralPath $configPath -Raw -Encoding utf8|ConvertFrom-Json;Assert-Guest ($config.profiles[0].applications.Count -eq 1 -and $config.profiles[0].applications[0].default) 'GUI capture creates only the selected fixture application default'
+ $config=Read-GuestConfig;Assert-Guest ($config.profiles[0].applications.Count -eq 1 -and $config.profiles[0].applications[0].default) 'GUI capture creates only the selected fixture application default'
  Move-Fixture ($x+200) ($y+180) 300 220;$hash=(Get-FileHash -LiteralPath $configPath).Hash;Command-Guest 112
  Wait-Guest {(Error-Guest (Frame-Guest) $guiBaseline) -le 2} 'GUI geometry restoration'
  Assert-Guest ((Get-FileHash -LiteralPath $configPath).Hash -eq $hash) 'GUI restore preserves saved configuration bytes'
  $report['gui_restore']=@{expected=$guiBaseline;actual=(Frame-Guest);edge_error_px=(Error-Guest (Frame-Guest) $guiBaseline)}
  Move-Fixture ($x+90) ($y+100) 380 280;$baseline=Frame-Guest;$revision=$config.revision
- [PinRealKeys]::Chord(0x79);Wait-Guest {$c=Get-Content -LiteralPath $configPath -Raw -Encoding utf8|ConvertFrom-Json;return $c.revision -gt $revision -and (Status-Guest) -match '^已记住'} 'actual F10 capture'
+ [PinRealKeys]::Chord(0x79);Wait-Guest {$c=Read-GuestConfig;return $c.revision -gt $revision -and (Status-Guest) -match '^已记住'} 'actual F10 capture'
  $hash=(Get-FileHash -LiteralPath $configPath).Hash
  for($i=0;$i -lt 20;$i++){
   Move-Fixture ($x+220) ($y+190) 300 220;$watch=[Diagnostics.Stopwatch]::StartNew();[PinRealKeys]::Chord(0x78)
@@ -103,7 +109,10 @@ try{
  [PinRealKeys]::AssertForeground();$report['restart_restore']=@{expected=$baseline;actual=(Frame-Guest);edge_error_px=(Error-Guest (Frame-Guest) $baseline);foreground_preserved=$true}
  Assert-Guest ((Get-FileHash -LiteralPath $configPath).Hash -eq $hash) 'Real F9 after restart uses the preserved preset without rewriting'
  Stop-GuestApp
-}catch{$report.errors+=$_.Exception.Message;$report['failure_stack']=$_.ScriptStackTrace}
+}catch{
+ $report.errors+=$_.Exception.Message;$report['failure_stack']=$_.ScriptStackTrace
+ try{$report['failure_observation']=@{status=(Status-Guest);refresh_enabled=[PinRealKeys]::Enabled($settings,$process.Id,109);foreground=[PinRealKeys]::GetForegroundWindow().ToInt64();fixture=$fixture.ToInt64();frame=(Frame-Guest);config=(Read-GuestConfig)}}catch{$report['failure_observation_error']=$_.Exception.Message}
+}
 finally{
  try{if($process -and -not $process.HasExited){Stop-GuestApp}}catch{$report.errors+=('Exit: '+$_.Exception.Message)}
  try{if($fixture -ne [IntPtr]::Zero){[PinRealKeys]::StopFixture()}}catch{$report.errors+=('Fixture cleanup: '+$_.Exception.Message)}

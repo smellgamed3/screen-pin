@@ -45,6 +45,7 @@ public static class PinDesktopKeyboard {
         }
     }
     public static int FocusId(IntPtr root,uint pid){uint owner;var thread=GetWindowThreadProcessId(root,out owner);if(owner!=pid)throw new InvalidOperationException("Focus root ownership changed");var info=new GuiInfo{size=(uint)Marshal.SizeOf(typeof(GuiInfo))};if(!GetGUIThreadInfo(thread,ref info))throw new InvalidOperationException("Focus query failed");return GetDlgCtrlID(info.focus);}
+    public static string[] FocusChain(IntPtr root,uint pid){uint owner;var thread=GetWindowThreadProcessId(root,out owner);if(owner!=pid)throw new InvalidOperationException("Focus root ownership changed");var info=new GuiInfo{size=(uint)Marshal.SizeOf(typeof(GuiInfo))};if(!GetGUIThreadInfo(thread,ref info))throw new InvalidOperationException("Focus query failed");var result=new List<string>();for(var h=info.focus;h!=IntPtr.Zero&&result.Count<16;h=GetAncestor(h,1)){result.Add(h.ToInt64()+":"+GetDlgCtrlID(h)+":"+Class(h));if(h==root)break;}return result.ToArray();}
     [DllImport("user32.dll")] private static extern int GetDlgCtrlID(IntPtr h);
     [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr h,int id);
     public static IntPtr Menu(IntPtr host,uint pid){
