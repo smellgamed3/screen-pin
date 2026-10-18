@@ -56,7 +56,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let element = unsafe { automation.ElementFromHandle(handle) }?;
         let provider_pid = unsafe { element.CurrentProcessId() }? as u32;
         if provider_pid != expected {
-            return Err(format!("UIA provider process does not match the isolated app: expected={expected}, window_owner={owner}, provider={provider_pid}, HWND={}", control.handle).into());
+            let factories = unsafe { automation.ProxyFactoryMapping()?.Count() }?;
+            let description = unsafe { element.CurrentProviderDescription() }?.to_string();
+            let name = unsafe { element.CurrentName() }?.to_string();
+            return Err(format!("UIA provider process does not match the isolated app: expected={expected}, window_owner={owner}, provider={provider_pid}, HWND={}, factories={factories}, description={description:?}, name={name:?}", control.handle).into());
         }
         if focus {
             let root = unsafe { GetAncestor(handle, GA_ROOT) };

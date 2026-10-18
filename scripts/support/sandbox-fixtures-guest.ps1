@@ -17,22 +17,25 @@ try{
  $appDir=Join-Path $env:LOCALAPPDATA ('ScreenPin-Fixtures-'+$expected.run_id);Expand-Archive -LiteralPath $zip -DestinationPath $appDir
  $exe=Join-Path $appDir 'screen-pin.exe';$report['exe_sha256']=(Get-FileHash -LiteralPath $exe).Hash
  Check-Fixtures ($report.exe_sha256 -eq $expected.exe_sha256) 'Fixture executable matches release'
+ $probe=Join-Path $InputDir 'test-bins/accessibility_probe.exe'
+ $report['uia_probe']=@{path=$probe;sha256=(Get-FileHash -LiteralPath $probe).Hash}
  $previousExe=$null
  if($expected.fixture_tests -contains 'upgrade'){
   $previousDir=Join-Path $appDir 'previous';Expand-Archive -LiteralPath (Join-Path $InputDir 'PreviousScreenPin.zip') -DestinationPath $previousDir;$previousExe=Join-Path $previousDir 'screen-pin.exe'
   Check-Fixtures ((Get-FileHash -LiteralPath $previousExe).Hash -eq $expected.previous_exe_sha256 -and $expected.previous_exe_sha256 -ne $expected.exe_sha256) 'Upgrade uses the distinct previous executable from its original ZIP'
  }
  $specs=@{
-  hotkey=@('hotkey-smoke.ps1','-Cycles','100','-UiaProbePath',"$InputDir\test-bins\accessibility_probe.exe")
-  settings=@('settings-smoke.ps1','-StorageFaults','-UiaProbePath',"$InputDir\test-bins\accessibility_probe.exe")
-  'write-limit'=@('write-limit-smoke.ps1','-UiaProbePath',"$InputDir\test-bins\accessibility_probe.exe")
-  'settings-draft'=@('settings-draft-smoke.ps1','-UiaProbePath',"$InputDir\test-bins\accessibility_probe.exe")
-  'editor-race'=@('editor-race-smoke.ps1','-UiaProbePath',"$InputDir\test-bins\accessibility_probe.exe")
-  race=@('race-smoke.ps1','-UiaProbePath',"$InputDir\test-bins\accessibility_probe.exe")
-  startup=@('startup-smoke.ps1','-UiaProbePath',"$InputDir\test-bins\accessibility_probe.exe")
-  dialog=@('dialog-keyboard-smoke.ps1','-UiaProbePath',"$InputDir\test-bins\accessibility_probe.exe")
-  tray=@('tray-keyboard-smoke.ps1','-UiaProbePath',"$InputDir\test-bins\accessibility_probe.exe")
-  upgrade=@('upgrade-smoke.ps1','-PreviousExe',$previousExe,'-PackagePath',$zip,'-UseDefaultConfigPath','-UiaProbePath',"$InputDir\test-bins\accessibility_probe.exe")
+  hotkey=@('hotkey-smoke.ps1','-Cycles','100','-UiaProbePath',$probe)
+  settings=@('settings-smoke.ps1','-StorageFaults','-UiaProbePath',$probe)
+  'write-limit'=@('write-limit-smoke.ps1','-UiaProbePath',$probe)
+  'settings-draft'=@('settings-draft-smoke.ps1','-UiaProbePath',$probe)
+  'editor-race'=@('editor-race-smoke.ps1','-UiaProbePath',$probe)
+  race=@('race-smoke.ps1','-UiaProbePath',$probe)
+  startup=@('startup-smoke.ps1','-UiaProbePath',$probe)
+  dialog=@('dialog-keyboard-smoke.ps1','-UiaProbePath',$probe)
+  tray=@('tray-keyboard-smoke.ps1','-UiaProbePath',$probe)
+  'uia-diagnostic'=@('uia-diagnostic-smoke.ps1','-UiaProbePath',$probe)
+  upgrade=@('upgrade-smoke.ps1','-PreviousExe',$previousExe,'-PackagePath',$zip,'-UseDefaultConfigPath','-UiaProbePath',$probe)
  }
  Check-Fixtures (@($expected.fixture_tests).Count -gt 0) 'At least one fixture case requested'
  $localRoot=(New-Item -ItemType Directory -Path (Join-Path $env:LOCALAPPDATA ('ScreenPin-FixtureResults-'+$expected.run_id)) -Force).FullName

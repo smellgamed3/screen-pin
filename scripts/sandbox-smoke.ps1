@@ -5,7 +5,7 @@ param(
  [switch]$Lifecycle,
  [switch]$Appearance,
  [switch]$Fixtures,
- [ValidateSet('hotkey','settings','write-limit','settings-draft','editor-race','race','startup','dialog','tray','upgrade')]
+ [ValidateSet('hotkey','settings','write-limit','settings-draft','editor-race','race','startup','dialog','tray','upgrade','uia-diagnostic')]
  [string[]]$FixtureTests=@('hotkey','settings','write-limit','settings-draft','editor-race','race','startup','dialog','tray'),
  [string]$PreviousZip
 )
@@ -34,9 +34,10 @@ try{
  $toolMapping='';$toolHashes=@{};$previousExeHash=$null
  if($Fixtures){
   $scriptsDir=(New-Item -ItemType Directory -Path (Join-Path $inputDir 'scripts') -Force).FullName;$supportDir=(New-Item -ItemType Directory -Path (Join-Path $scriptsDir 'support') -Force).FullName
-  foreach($name in @('hotkey','settings','write-limit','settings-draft','editor-race','race','startup','dialog-keyboard','tray-keyboard','upgrade')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot ($name+'-smoke.ps1')) -Destination $scriptsDir}
+  foreach($name in @('hotkey','settings','write-limit','settings-draft','editor-race','race','startup','dialog-keyboard','tray-keyboard','upgrade','uia-diagnostic')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot ($name+'-smoke.ps1')) -Destination $scriptsDir}
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot '../Cargo.toml') -Destination $inputDir
   foreach($file in Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'support') -File -Filter '*.cs'){Copy-Item -LiteralPath $file.FullName -Destination $supportDir}
+  Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'support/managed-uia-probe.ps1') -Destination $supportDir
   $binDir=(New-Item -ItemType Directory -Path (Join-Path $inputDir 'test-bins') -Force).FullName
   foreach($name in @('accessibility_probe.exe','desktop_probe.exe')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot ('../target/debug/'+$name)) -Destination $binDir}
   if($FixtureTests -contains 'upgrade'){
