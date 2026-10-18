@@ -59,7 +59,7 @@ cargo run --locked --bin desktop_probe -- --output artifacts/desktop-probe.json
 
 [设计基线](docs/design.md) · [验收门槛](docs/acceptance.md) · [领域术语](CONTEXT.md)
 
-最新环境诊断见[阶段 25](docs/validation/phase-25.md)：保留确认框／托盘的来宾 UIA 失败，宿主只读对照通过；完整通过组件数仍为 19 项，相关宿主键盘复测及实机门槛仍未完成。
+当前证据已按发布 EXE 统一整理，见[覆盖审计](docs/validation/coverage.md)及[阶段 26 验收顺序](docs/validation/phase-26.md)。19 项组件通过证据保持不变；[阶段 25](docs/validation/phase-25.md)的来宾 UIA 失败、相关宿主复测及实机门槛继续保留。
 
 隔离来宾中的真实 Explorer 重启、开机启动登记与路径修复验证见 [阶段 21](docs/validation/phase-21.md)。系统重启登录仍待验证。
 
