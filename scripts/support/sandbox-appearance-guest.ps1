@@ -43,8 +43,8 @@ try{
  function Check-Appearance([string]$name){
   $deadline=[DateTime]::UtcNow.AddSeconds(2);$attempts=0;$watch=[Diagnostics.Stopwatch]::StartNew()
   do{
-   $client=[PinViewport]::Client($settings);$chrome=@();foreach($id in @(100,101,102,136,137,138,143,144)){$r=[PinViewport]::Bounds([PinViewport]::GetDlgItem($settings,$id));$chrome+=@{id=$id;rect=$r}}
-   $header=($chrome[0..2].rect.Bottom|Measure-Object -Maximum).Maximum;$footer=$chrome[3].rect.Top;$content=@([PinViewport]::Content($settings));$painted=@($content|Where-Object {$_.visible.Bottom -gt $_.visible.Top})
+   $client=[PinViewport]::Client($settings);$chrome=@();foreach($id in @(100,101,102,136,137,138,143,144,145)){$r=[PinViewport]::Bounds([PinViewport]::GetDlgItem($settings,$id));$chrome+=@{id=$id;rect=$r}}
+   $header=($chrome|Where-Object {$_.id -in @(100,101,102,145)}|ForEach-Object {$_.rect.Bottom}|Measure-Object -Maximum).Maximum;$footer=$chrome[3].rect.Top;$content=@([PinViewport]::Content($settings));$painted=@($content|Where-Object {$_.visible.Bottom -gt $_.visible.Top})
    $invalid=@($chrome|Where-Object {$_.rect.Left -lt $client.Left -or $_.rect.Top -lt $client.Top -or $_.rect.Right -gt $client.Right -or $_.rect.Bottom -gt $client.Bottom}).Count+@($painted|Where-Object {$_.visible.Top -lt $header -or $_.visible.Bottom -gt $footer}).Count
    $attempts++;if($invalid -eq 0 -and $painted.Count -gt 0){break};Start-Sleep -Milliseconds 20
   }while([DateTime]::UtcNow -lt $deadline)
@@ -93,7 +93,7 @@ try{
   101=@(201,203,209)
   102=@(301,304,306,313)
  }
- $fixedCaptions=@(100,101,102,136,137,143)
+ $fixedCaptions=@(100,101,102,136,137,143,145)
  $report['readability_expected_samples']=3*2*(($singleRowLabels.Values|ForEach-Object {$_.Count}|Measure-Object -Sum).Sum+3*$fixedCaptions.Count)
  foreach($mode in @('default','large-font','large-font-high-contrast')){
   @{mode=$mode;phase='before-system-change';utc=[DateTime]::UtcNow.ToString('o')}|ConvertTo-Json|Set-Content (Join-Path $OutputDir 'guest-progress.json') -Encoding utf8

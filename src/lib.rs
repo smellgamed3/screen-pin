@@ -17,4 +17,7 @@ pub mod startup;
 pub mod shell;
 
 #[cfg(windows)]
+pub mod watch;
+
+#[cfg(windows)]
 pub mod lifecycle;

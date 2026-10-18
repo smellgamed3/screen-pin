@@ -30,6 +30,7 @@ const WORKER_MESSAGE: u32 = WM_APP + 2;
 const TRAY_MESSAGE: u32 = WM_APP + 3;
 const HANDOFF_SUSPEND: u32 = WM_APP + 4;
 const HANDOFF_RESUME: u32 = WM_APP + 5;
+const LIVE_WINDOW_MESSAGE: u32 = WM_APP + 6;
 const TOPOLOGY_TIMER: usize = 1;
 const IDENTIFY_TIMER: usize = 2;
 const TOAST_TIMER: usize = 3;
@@ -82,6 +83,9 @@ const ID_REBIND_HINT: i32 = 141;
 const ID_CREATE_DEFAULT: i32 = 142;
 const ID_UNDO_TARGET_LABEL: i32 = 143;
 const ID_UNDO_TARGET: i32 = 144;
+const ID_EDIT_MODE: i32 = 145;
+const ID_LIVE_WINDOW: i32 = 146;
+const ID_LIVE_GEOMETRY: i32 = 147;
 const ID_SETTINGS_TITLE: i32 = 200;
 const ID_RESTORE_KEY_LABEL: i32 = 201;
 const ID_RESTORE_KEY: i32 = 202;
@@ -206,6 +210,10 @@ struct Shell {
     identifiers: Vec<HWND>,
     toast_window: Option<HWND>,
     tray_ready: bool,
+    watcher: Option<crate::watch::Watcher>,
+    live_window: Option<crate::watch::ObservedWindow>,
+    edit_size: Option<(i32, i32)>,
+    edit_foreground: Option<isize>,
 }
 
 /// Called after the lifecycle layer verifies that the owner is this user/session.
@@ -376,6 +384,10 @@ unsafe fn run_native(
         identifiers: Vec::new(),
         toast_window: None,
         tray_ready: false,
+        watcher: None,
+        live_window: None,
+        edit_size: None,
+        edit_foreground: None,
     };
     unsafe {
         ChangeWindowMessageFilterEx(host, SHOW_MESSAGE, MSGFLT_ALLOW, None)
@@ -632,10 +644,180 @@ impl Shell {
     fn checked(&self, id: i32) -> bool {
         self.send(id, BM_GETCHECK, 0, 0) == 1
     }
+    fn selected_summary(&self) -> Option<&crate::model::WindowSummary> {
+        if self.watcher.is_some() {
+            self.live_window.as_ref().map(|window| &window.summary)
+        } else {
+            self.selection(ID_WINDOWS, false)
+                .and_then(|i| self.view.windows.get(i))
+        }
+    }
     fn selected_window(&self) -> Option<(isize, u32, u64)> {
-        self.selection(ID_WINDOWS, false)
-            .and_then(|i| self.view.windows.get(i))
-            .map(|w| (w.handle, w.pid, w.token))
+        self.selected_summary().map(|w| (w.handle, w.pid, w.token))
+    }
+
+    fn set_edit_mode(&mut self, enabled: bool) -> Result<(), String> {
+        if enabled == self.watcher.is_some() {
+            return Ok(());
+        }
+        let watcher = if enabled {
+            Some(crate::watch::Watcher::start(
+                self.host,
+                LIVE_WINDOW_MESSAGE,
+            )?)
+        } else {
+            None
+        };
+        unsafe {
+            SetWindowPos(
+                self.window,
+                Some(if enabled {
+                    HWND_TOPMOST
+                } else {
+                    HWND_NOTOPMOST
+                }),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+        }
+        .map_err(|e| format!("无法切换编辑模式：{e}"))?;
+        self.watcher = watcher;
+        self.live_window = None;
+        self.edit_foreground = None;
+        self.check(ID_EDIT_MODE, enabled);
+        self.text(ID_INTRO, if enabled {
+            "编辑模式 · 保持置顶\r\n点击其他应用，移动或缩放窗口，再回来记住或恢复；目标会保留。"
+        } else {
+            "① 摆好目标窗口  →  ② 记住位置  →  ③ 移动后恢复。关闭界面后仍在托盘运行。"
+        });
+        self.text(ID_LIVE_WINDOW, "当前窗口：请点击要调整的应用窗口");
+        self.text(ID_LIVE_GEOMETRY, "位置和大小会自动更新（物理像素）");
+        if enabled {
+            self.page = PAGE_MAIN;
+            let mut rect = RECT::default();
+            if unsafe { GetWindowRect(self.window, &mut rect) }.is_ok()
+                && !unsafe { IsZoomed(self.window) }.as_bool()
+            {
+                self.edit_size = Some((rect.right - rect.left, rect.bottom - rect.top));
+                self.resize_panel(
+                    (760.0 * self.scale) as i32,
+                    (f64::from(self.row * 14 + 180) * self.scale) as i32,
+                );
+            }
+        } else if let Some((width, height)) = self.edit_size.take() {
+            self.resize_panel(width, height);
+        }
+        self.scroll = 0;
+        self.apply_fonts();
+        self.match_preview();
+        Ok(())
+    }
+
+    fn resize_panel(&self, width: i32, height: i32) {
+        let mut info = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        let mut rect = RECT::default();
+        unsafe {
+            if GetWindowRect(self.window, &mut rect).is_ok()
+                && GetMonitorInfoW(
+                    MonitorFromWindow(self.window, MONITOR_DEFAULTTONEAREST),
+                    &mut info,
+                )
+                .as_bool()
+            {
+                let work = info.rcWork;
+                let width = width.min(work.right - work.left);
+                let height = height.min(work.bottom - work.top);
+                let _ = SetWindowPos(
+                    self.window,
+                    None,
+                    rect.left.clamp(work.left, work.right - width),
+                    rect.top.clamp(work.top, work.bottom - height),
+                    width,
+                    height,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+        }
+    }
+
+    fn live_window_ready(&mut self) {
+        let Some(update) = self
+            .watcher
+            .as_ref()
+            .and_then(|watcher| watcher.take_update())
+        else {
+            return;
+        };
+        let previous = self
+            .live_window
+            .as_ref()
+            .map(|window| window.summary.clone());
+        self.live_window = match update {
+            crate::watch::Update::Ready(window) => {
+                let foreground = unsafe { GetForegroundWindow() };
+                let mut pid = 0;
+                unsafe {
+                    GetWindowThreadProcessId(foreground, Some(&mut pid));
+                }
+                let expected = if pid == std::process::id() {
+                    self.edit_foreground
+                } else {
+                    Some(foreground.0 as isize)
+                };
+                if expected.is_some_and(|handle| handle != window.summary.handle) {
+                    return;
+                }
+                let rect = window.frame;
+                self.text(
+                    ID_LIVE_WINDOW,
+                    &format!(
+                        "当前窗口：{}\r\n{}",
+                        window.summary.app_name, window.summary.title
+                    ),
+                );
+                self.text(
+                    ID_LIVE_GEOMETRY,
+                    &format!(
+                        "位置 ({}, {})  ·  大小 {} × {} px\r\n{}{}",
+                        rect.left,
+                        rect.top,
+                        rect.right - rect.left,
+                        rect.bottom - rect.top,
+                        window.monitor_name,
+                        if window.maximized {
+                            " · 已最大化（保存正常还原位置）"
+                        } else {
+                            ""
+                        }
+                    ),
+                );
+                Some(window)
+            }
+            crate::watch::Update::Pending => {
+                self.text(ID_LIVE_WINDOW, "当前窗口：正在识别…");
+                self.text(ID_LIVE_GEOMETRY, "");
+                None
+            }
+            crate::watch::Update::Unavailable(reason) => {
+                self.text(ID_LIVE_WINDOW, "当前窗口：暂不可操作");
+                self.text(ID_LIVE_GEOMETRY, &reason);
+                None
+            }
+        };
+        if previous
+            != self
+                .live_window
+                .as_ref()
+                .map(|window| window.summary.clone())
+        {
+            self.match_preview();
+        }
     }
     fn editable(&self) -> bool {
         !self.view.read_only
@@ -658,6 +840,15 @@ impl Shell {
             (ID_PAGE_MAIN, 0, "BUTTON", "窗口与预设(&W)", button),
             (ID_PAGE_SETTINGS, 0, "BUTTON", "设置(&S)", button),
             (ID_PAGE_ASSOCIATE, 0, "BUTTON", "关联显示器(&D)", button),
+            (
+                ID_EDIT_MODE,
+                0,
+                "BUTTON",
+                "编辑模式：置顶并跟随当前窗口(&I)",
+                check,
+            ),
+            (ID_LIVE_WINDOW, 1, "STATIC", "", label),
+            (ID_LIVE_GEOMETRY, 1, "STATIC", "", label),
             (
                 ID_INTRO,
                 1,
@@ -1360,7 +1551,7 @@ impl Shell {
             "需要确认显示器关联；请打开“关联显示器”。".to_string()
         } else if self.view.active_profile.is_none() {
             "正在识别显示器，请稍后刷新。".to_string()
-        } else if self.selected_profile != self.view.active_profile {
+        } else if self.selected_profile != self.view.active_profile && self.watcher.is_none() {
             "正在查看未连接的方案，无法修改；热键始终使用当前活动方案。".to_string()
         } else {
             let missing = [self.active_settings.restore, self.active_settings.remember]
@@ -1590,11 +1781,17 @@ impl Shell {
     }
 
     fn match_preview(&mut self) {
-        let Some(index) = self.selection(ID_WINDOWS, false) else {
-            self.text(ID_MATCH, "选择窗口以查看匹配结果。");
-            return;
-        };
-        let Some(window) = self.view.windows.get(index) else {
+        let Some(window) = self.selected_summary() else {
+            self.text(
+                ID_MATCH,
+                if self.watcher.is_some() {
+                    "激活其他应用后，可在此记住或恢复位置。"
+                } else {
+                    "选择窗口以查看匹配结果。"
+                },
+            );
+            self.update_enabled();
+            self.layout();
             return;
         };
         let matched = self
@@ -1644,8 +1841,7 @@ impl Shell {
 
     fn new_rule_preview(&self) {
         let preview = self
-            .selection(ID_WINDOWS, false)
-            .and_then(|i| self.view.windows.get(i))
+            .selected_summary()
             .map(|window| {
                 let app = self
                     .view
@@ -1660,8 +1856,7 @@ impl Shell {
     }
 
     fn can_create_default(&self) -> bool {
-        self.selection(ID_WINDOWS, false)
-            .and_then(|i| self.view.windows.get(i))
+        self.selected_summary()
             .and_then(|window| {
                 self.view
                     .active_profile
@@ -1774,7 +1969,10 @@ impl Shell {
         let target = self.selected_window().is_some();
         let editable = self.editable() && available;
         for id in [ID_REMEMBER, ID_CREATE_RULE] {
-            self.enable(id, editable && target);
+            let active_editable = !self.view.read_only
+                && self.view.active_profile.is_some()
+                && (self.watcher.is_some() || self.selected_profile == self.view.active_profile);
+            self.enable(id, available && active_editable && target);
         }
         self.enable(
             ID_RESTORE,
@@ -2323,6 +2521,12 @@ impl Shell {
             return;
         }
         let result: Result<(), String> = match id {
+            ID_EDIT_MODE => {
+                let enabled = self.checked(ID_EDIT_MODE);
+                let result = self.set_edit_mode(enabled);
+                self.check(ID_EDIT_MODE, self.watcher.is_some());
+                result
+            }
             ID_PAGE_MAIN | ID_PAGE_SETTINGS | ID_PAGE_ASSOCIATE => {
                 self.page = if id == ID_PAGE_MAIN {
                     PAGE_MAIN
@@ -2518,6 +2722,10 @@ impl Shell {
                 self.command((wp.0 & 0xffff) as i32, ((wp.0 >> 16) & 0xffff) as u16);
                 Some(LRESULT(0))
             }
+            LIVE_WINDOW_MESSAGE => {
+                self.live_window_ready();
+                Some(LRESULT(0))
+            }
             WM_HOTKEY => {
                 if let Some(key) = self
                     .registrations
@@ -2526,6 +2734,18 @@ impl Shell {
                     .map(|r| r.key)
                 {
                     let target = unsafe { GetForegroundWindow() };
+                    if target == self.window && self.watcher.is_some() {
+                        if let Some((handle, pid, token)) = self.selected_window() {
+                            self.submit(if key == self.active_settings.restore {
+                                Request::Restore { handle, pid, token }
+                            } else {
+                                Request::Remember { handle, pid, token }
+                            });
+                        } else {
+                            self.result("请先激活要调整的应用窗口。", true);
+                        }
+                        return Some(LRESULT(0));
+                    }
                     let mut pid = 0;
                     unsafe {
                         GetWindowThreadProcessId(target, Some(&mut pid));
@@ -2555,6 +2775,10 @@ impl Shell {
                 Some(LRESULT(0))
             }
             WM_CLOSE if hwnd == self.window => {
+                if let Err(error) = self.set_edit_mode(false) {
+                    self.result(&error, false);
+                    return Some(LRESULT(0));
+                }
                 if self.tray_ready {
                     unsafe {
                         let _ = ShowWindow(self.window, SW_HIDE);
@@ -2564,7 +2788,35 @@ impl Shell {
                 }
                 Some(LRESULT(0))
             }
+            WM_ACTIVATE if hwnd == self.window && wp.0 & 0xffff != WA_INACTIVE as usize => {
+                if self.watcher.is_some() && lp.0 != 0 {
+                    let mut pid = 0;
+                    unsafe {
+                        GetWindowThreadProcessId(HWND(lp.0 as _), Some(&mut pid));
+                    }
+                    if pid != std::process::id() {
+                        self.edit_foreground = Some(lp.0);
+                        if let Some(watcher) = &self.watcher {
+                            watcher.retain(lp.0);
+                        }
+                        if self
+                            .live_window
+                            .as_ref()
+                            .is_some_and(|w| w.summary.handle != lp.0)
+                        {
+                            self.live_window = None;
+                            self.text(ID_LIVE_WINDOW, "当前窗口：正在识别…");
+                            self.text(ID_LIVE_GEOMETRY, "");
+                            self.match_preview();
+                        }
+                    }
+                }
+                None
+            }
             WM_SIZE if hwnd == self.window => {
+                if wp.0 == SIZE_MINIMIZED as usize {
+                    let _ = self.set_edit_mode(false);
+                }
                 self.layout();
                 Some(LRESULT(0))
             }
@@ -2738,16 +2990,21 @@ impl Shell {
             0
         };
         let end = if self.page == PAGE_MAIN {
-            row + 24
-                + if has_editor {
-                    row * 26 + 62 + preview_height + geometry_extra
+            row * 2
+                + 32
+                + if self.watcher.is_some() {
+                    row * 11 + 24
                 } else {
-                    row * 16 + 24 + preview_height
+                    if has_editor {
+                        row * 26 + 62 + preview_height + geometry_extra
+                    } else {
+                        row * 16 + 24 + preview_height
+                    }
                 }
         } else if self.page == PAGE_SETTINGS {
-            row + 24 + row * 16 + 64 + startup_height
+            row * 2 + 32 + row * 16 + 64 + startup_height
         } else {
-            row + 24 + row * 18 + 72
+            row * 2 + 32 + row * 18 + 72
         };
         let compact_feedback = height < 600;
         let feedback_height = if compact_feedback {
@@ -2756,7 +3013,7 @@ impl Shell {
             row * 4 + 36
         };
         let footer_top = (height - feedback_height).max(row + 24);
-        self.content_top = row + 24;
+        self.content_top = row * 2 + 32;
         self.content_bottom = (footer_top - 12).max(self.content_top + 1);
         let visible_height = self.content_bottom - self.content_top;
         self.content_height = (end - self.content_top).max(1);
@@ -2781,7 +3038,22 @@ impl Shell {
             unsafe {
                 let _ = ShowWindow(
                     c.hwnd,
-                    if c.page == 0 || c.page == self.page {
+                    if (c.page == 0 || c.page == self.page)
+                        && (c.page != PAGE_MAIN
+                            || self.watcher.is_none()
+                            || matches!(
+                                c.id,
+                                ID_INTRO
+                                    | ID_ENV
+                                    | ID_LIVE_WINDOW
+                                    | ID_LIVE_GEOMETRY
+                                    | ID_MATCH
+                                    | ID_REMEMBER
+                                    | ID_RESTORE
+                            ))
+                        && (!matches!(c.id, ID_LIVE_WINDOW | ID_LIVE_GEOMETRY)
+                            || self.watcher.is_some())
+                    {
                         SW_SHOW
                     } else {
                         SW_HIDE
@@ -2842,8 +3114,18 @@ impl Shell {
             third,
             row,
         );
-        let y = row + 24;
-        if self.page == PAGE_MAIN {
+        self.place(ID_EDIT_MODE, margin, row + 20, width, row);
+        let y = row * 2 + 32;
+        if self.page == PAGE_MAIN && self.watcher.is_some() {
+            self.place(ID_INTRO, margin, y, width, row * 2);
+            self.place(ID_LIVE_WINDOW, margin, y + row * 2 + 8, width, row * 2);
+            self.place(ID_LIVE_GEOMETRY, margin, y + row * 4 + 12, width, row * 2);
+            self.place(ID_MATCH, margin, y + row * 7 + 24, width, row * 2);
+            let half = (width - gap) / 2;
+            self.place(ID_REMEMBER, margin, y + row * 6 + 20, half, row);
+            self.place(ID_RESTORE, margin + half + gap, y + row * 6 + 20, half, row);
+            self.place(ID_ENV, margin, y + row * 9 + 24, width, row * 2);
+        } else if self.page == PAGE_MAIN {
             self.place(ID_INTRO, margin, y, width, row * 2);
             let profile_label = self.label_width(ID_PROFILE_LABEL, 100).min(width / 2);
             self.place(ID_PROFILE_LABEL, margin, y + row * 2, profile_label, row);
@@ -3358,6 +3640,10 @@ mod tests {
                 identifiers: vec![],
                 toast_window: None,
                 tray_ready: false,
+                watcher: None,
+                live_window: None,
+                edit_size: None,
+                edit_foreground: None,
             },
             received,
         )

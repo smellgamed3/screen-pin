@@ -29,6 +29,8 @@ public static class PinRealKeys {
  [DllImport("user32.dll")]private static extern bool SetForegroundWindow(IntPtr h);
  [DllImport("user32.dll")]private static extern bool IsWindow(IntPtr h);
  [DllImport("user32.dll")]private static extern bool IsWindowEnabled(IntPtr h);
+ [DllImport("user32.dll")]private static extern IntPtr GetWindowLongPtrW(IntPtr h,int index);
+ [DllImport("user32.dll")]private static extern uint GetDoubleClickTime();
  [DllImport("user32.dll")]private static extern short GetAsyncKeyState(int key);
  [DllImport("user32.dll",SetLastError=true)]private static extern uint SendInput(uint n,Input[] inputs,int size);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)]private static extern ushort RegisterClassW(ref WindowClass c);
@@ -61,6 +63,8 @@ public static class PinRealKeys {
  private static string failure;
  private static string fixtureClass;
  private static bool held;
+ private static readonly Dictionary<IntPtr,long> guestCaptionClicks=new Dictionary<IntPtr,long>();
+ private static long GuestMilliseconds(){return (long)(System.Diagnostics.Stopwatch.GetTimestamp()*(1000.0/System.Diagnostics.Stopwatch.Frequency));}
  private static IntPtr rebuildingWindow;
  private static readonly ManualResetEventSlim rebuilt=new ManualResetEventSlim(false);
  private static string rebuildFailure;
@@ -124,15 +128,18 @@ public static class PinRealKeys {
   uint owner;GetWindowThreadProcessId(window,out owner);Rect rect;Point cursor;
   if(owner!=expectedPid||GetAncestor(window,2)!=window||!GetWindowRect(window,out rect)||!GetCursorPos(out cursor))throw new InvalidOperationException("Guest activation identity/bounds unavailable");
   var point=new Point{x=rect.Left+(rect.Right-rect.Left)/2,y=rect.Top+12};
+  bool wasTopmost=(GetWindowLongPtrW(window,-20).ToInt64()&8)!=0;
   if(!SetWindowPos(window,new IntPtr(-1),0,0,0,0,0x13))throw new InvalidOperationException("Guest activation placement failed");
   try{
+   long previousClick;var now=GuestMilliseconds();if(guestCaptionClicks.TryGetValue(window,out previousClick)){var remaining=(long)GetDoubleClickTime()+30-(now-previousClick);if(remaining>0)Thread.Sleep((int)remaining);}
    Thread.Sleep(60);GetWindowThreadProcessId(window,out owner);
    if(owner!=expectedPid||GetAncestor(WindowFromPoint(point),2)!=window||!SetCursorPos(point.x,point.y))throw new InvalidOperationException("Guest activation point is covered or ownership changed; click cancelled");
    var input=new[]{new Input{data=new InputData{mouse=new Mouse{flags=2}}},new Input{data=new InputData{mouse=new Mouse{flags=4}}}};
    if(SendInput(2,input,System.Runtime.InteropServices.Marshal.SizeOf(typeof(Input)))!=2){SendInput(1,new[]{new Input{data=new InputData{mouse=new Mouse{flags=4}}}},System.Runtime.InteropServices.Marshal.SizeOf(typeof(Input)));throw new InvalidOperationException("Guest caption click was incomplete");}
+   guestCaptionClicks[window]=GuestMilliseconds();
    for(int i=0;i<100&&GetForegroundWindow()!=window;i++)Thread.Sleep(10);
    if(GetForegroundWindow()!=window)throw new InvalidOperationException("Guest caption click did not activate the intended window");
-  }finally{SetWindowPos(window,new IntPtr(-2),0,0,0,0,0x13);SetCursorPos(cursor.x,cursor.y);}
+  }finally{SetWindowPos(window,new IntPtr(wasTopmost?-1:-2),0,0,0,0,0x13);SetCursorPos(cursor.x,cursor.y);}
  }
  public static void StopFixture(){ReleaseHeldKeys();if(Fixture!=IntPtr.Zero&&IsWindow(Fixture))PostMessageW(Fixture,0x10,IntPtr.Zero,IntPtr.Zero);if(fixtureThread!=null)fixtureThread.Join(2000);}
  public static void AssertForeground(){
@@ -145,6 +152,7 @@ public static class PinRealKeys {
  private static void Send(Input[] inputs){if(SendInput((uint)inputs.Length,inputs,Marshal.SizeOf(typeof(Input)))!=inputs.Length)throw new InvalidOperationException("SendInput did not accept the complete owned-fixture sequence");}
  private static void CheckReleased(ushort functionKey){foreach(int key in new[]{0x11,0x12,0x78,0x79,(int)functionKey})if((GetAsyncKeyState(key)&0x8000)!=0)throw new InvalidOperationException("A test modifier/function key is physically held; input cancelled.");}
  public static void Chord(ushort functionKey){AssertForeground();CheckReleased(functionKey);try{Send(new[]{Key(0x11,false),Key(0x12,false),Key(functionKey,false),Key(functionKey,true),Key(0x12,true),Key(0x11,true)});}catch{Send(new[]{Key(functionKey,true),Key(0x12,true),Key(0x11,true)});throw;}AssertForeground();}
+ public static void ChordToOwnedSettings(IntPtr ui,uint expected,ushort key){AssertOwner(ui,expected);if(GetForegroundWindow()!=ui)throw new InvalidOperationException("Settings foreground changed; input cancelled");CheckReleased(key);try{Send(new[]{Key(0x11,false),Key(0x12,false),Key(key,false),Key(key,true),Key(0x12,true),Key(0x11,true)});}catch{Send(new[]{Key(key,true),Key(0x12,true),Key(0x11,true)});throw;}AssertOwner(ui,expected);if(GetForegroundWindow()!=ui)throw new InvalidOperationException("Settings foreground changed after hotkey");}
  public static void BeginHold(){AssertForeground();CheckReleased(0x79);held=true;Send(new[]{Key(0x11,false),Key(0x12,false),Key(0x79,false)});AssertForeground();}
  public static void RepeatHeld(){AssertForeground();if(!held)throw new InvalidOperationException("No test hold is active");Send(new[]{Key(0x79,false)});AssertForeground();}
  public static void EndHold(){AssertForeground();ReleaseHeldKeys();AssertForeground();}

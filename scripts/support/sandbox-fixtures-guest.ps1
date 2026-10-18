@@ -26,6 +26,7 @@ try{
  }
  $specs=@{
   hotkey=@('hotkey-smoke.ps1','-Cycles','100','-UiaProbePath',$probe)
+  'edit-mode'=@('edit-mode-smoke.ps1')
   settings=@('settings-smoke.ps1','-StorageFaults','-UiaProbePath',$probe)
   'write-limit'=@('write-limit-smoke.ps1','-UiaProbePath',$probe)
   'settings-draft'=@('settings-draft-smoke.ps1','-UiaProbePath',$probe)

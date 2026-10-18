@@ -2,7 +2,7 @@
 
 Windows 11 x64 窗口位置工具：记住应用窗口在指定显示器的位置和大小，随时按热键恢复。
 
-[下载 Windows x64 预览版](https://github.com/smellgamed3/screen-pin/releases/tag/v0.1.0-preview.1) · [发布说明](docs/releases/v0.1.0-preview.1.md)
+[下载 Windows x64 预览版](https://github.com/smellgamed3/screen-pin/releases/tag/v0.1.0-preview.2) · [发布说明](docs/releases/v0.1.0-preview.2.md)
 
 ## 使用
 
@@ -12,6 +12,8 @@ Windows 11 x64 窗口位置工具：记住应用窗口在指定显示器的位�
 4. 随意移动窗口，按 **Ctrl+Alt+F9** 恢复。
 
 两个热键均可在设置中修改。关闭配置界面仍会运行，退出请使用托盘菜单。配置界面的导航、撤销和最近结果始终可见，长表单可滚动或用 Tab 操作，长标题可横向滚动查看。撤销旁的目标字段保留完整范围，文字过长时可聚焦后用 Home／End 查看。
+
+Preview 2 新增 **编辑模式**：勾选界面顶部的开关，Screen Pin 切换为便捷的置顶面板。点击其他应用后，面板自动显示该窗口的标题、显示器、位置和大小；移动或缩放时实时更新。回到面板直接点击“记住”或“恢复”，目标仍是刚才的应用窗口。在面板内也可使用原有热键。取消勾选恢复完整配置界面，关闭或最小化面板会结束编辑模式。此功能的构建与验证记录见 [阶段 28](docs/validation/phase-28.md)；Preview 1 保留原发布内容。
 
 默认同一应用的窗口共用一份预设。如需区分项目或文档，在主界面选择目标窗口，输入标题关键字，捕获为特定窗口规则；按规则顺序选择第一条匹配，没有特定匹配时使用应用默认。更新结果会说明改了哪条规则，托盘可撤销最近一次预设更新。
 
@@ -30,7 +32,7 @@ Windows 11 x64 窗口位置工具：记住应用窗口在指定显示器的位�
 - 预设编辑草稿在窗口恢复后保留；同一预设被更新时会提示冲突，拒绝旧草稿覆盖。点击刷新可放弃冲突草稿并载入最新值。
 - 设置页输入在恢复和刷新后保留，明确保存成功才生效；保存失败可直接重试，原有热键继续有效。
 
-当前交付为开发预览；实测范围和未验证项见 [当前验收记录](docs/validation/phase-27.md) 和 [需求覆盖审计](docs/validation/coverage.md)。已补充干净 Windows Sandbox 的基本流程验证；物理多屏、混合 DPI、真实 UAC、系统重启／登录及独立人工验收仍未完成，尚不能视为最终验收通过。补充硬件与交互验证可按 [实机操作单](docs/validation/manual.md) 执行。
+当前交付为开发预览；实测范围和未验证项见 [当前验收记录](docs/validation/phase-28.md) 和 [需求覆盖审计](docs/validation/coverage.md)。已补充干净 Windows Sandbox 的基本流程验证；物理多屏、混合 DPI、真实 UAC、系统重启／登录及独立人工验收仍未完成，尚不能视为最终验收通过。补充硬件与交互验证可按 [实机操作单](docs/validation/manual.md) 执行。
 
 ## 开发
 
@@ -59,7 +61,7 @@ cargo run --locked --bin desktop_probe -- --output artifacts/desktop-probe.json
 
 [设计基线](docs/design.md) · [验收门槛](docs/acceptance.md) · [领域术语](CONTEXT.md)
 
-当前发布包累计有 23 项组件通过证据，见[覆盖审计](docs/validation/coverage.md)及[阶段 27 实测](docs/validation/phase-27.md)。首轮 Brave 耗时失败、来宾 UIA 差异及剩余实机门槛分别保留，整体验收仍未完成。
+Preview 1 发布包累计有 23 项组件通过证据，见[覆盖审计](docs/validation/coverage.md)及[阶段 27 实测](docs/validation/phase-27.md)。首轮 Brave 耗时失败、来宾 UIA 差异及剩余实机门槛分别保留，整体验收仍未完成。
 
 隔离来宾中的真实 Explorer 重启、开机启动登记与路径修复验证见 [阶段 21](docs/validation/phase-21.md)。系统重启登录仍待验证。
 

@@ -674,6 +674,11 @@ fn outer(hwnd: HWND) -> Result<Rect> {
     }
     Ok(value)
 }
+pub fn visible_frame(handle: isize) -> Result<Rect> {
+    let _dpi = DpiScope::enter();
+    visible(HWND(handle as _))
+}
+
 fn visible(hwnd: HWND) -> Result<Rect> {
     let mut value = RECT::default();
     unsafe {
