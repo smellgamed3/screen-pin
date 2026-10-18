@@ -15,7 +15,7 @@ $process=$null;$settings=[IntPtr]::Zero;$hostWindow=[IntPtr]::Zero;$dialog=[IntP
 $startupBefore=[Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run','ScreenPin',$null)
 function Assert-DK($condition,[string]$message){if(-not $condition){throw $message};$report.checks+=$message}
 function Wait-DK([scriptblock]$condition,[string]$description){$watch=[Diagnostics.Stopwatch]::StartNew();do{try{if(& $condition){return}}catch{if($_.Exception.Message -notmatch 'Timed out reading own app result'){throw};$report['transient_status_reads']=1+$report.transient_status_reads};Start-Sleep -Milliseconds 15}while($watch.ElapsedMilliseconds -lt 6000);throw ('Timeout: '+$description)}
-function Read-DK {Get-Content -LiteralPath $configPath -Raw|ConvertFrom-Json}
+function Read-DK {[PinRealKeys]::ReadConfig($configPath)|ConvertFrom-Json}
 function Hash-DK {(Get-FileHash -LiteralPath $configPath).Hash}
 function Status-DK {[PinRealKeys]::Text($settings,138)}
 function Copy-DK($value){return $value|ConvertTo-Json -Depth 24|ConvertFrom-Json}
@@ -38,6 +38,7 @@ function Stop-DK {
     Assert-DK ($process.ExitCode -eq 0) 'Owned dialog test instance exited normally';$report.normal_exits+=@{pid=$process.Id;exit_code=$process.ExitCode};$script:process=$null
 }
 function Focus-DK {
+    [PinRealKeys]::ActivateGuestWindow($settings,$process.Id)
     $inputPath=Join-Path $configDir 'focus-input.json';$outputPath=Join-Path $configDir 'focus-output.json'
     ConvertTo-Json -InputObject @(@{handle=[PinDesktopKeyboard]::GetDlgItem($settings,100).ToInt64();id=100;page='activation'})|Set-Content -LiteralPath $inputPath -Encoding utf8
     & $UiaProbePath $inputPath $outputPath $process.Id --focus

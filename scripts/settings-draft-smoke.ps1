@@ -28,7 +28,7 @@ $report=[ordered]@{started_utc=[DateTime]::UtcNow.ToString('o');exe_path=$ExePat
 $process=$null;$hostWindow=[IntPtr]::Zero;$settings=[IntPtr]::Zero;$lock=$null;$cycle=0
 $startupBefore=[Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run','ScreenPin',$null)
 function Assert-SD($value,[string]$message){if(-not $value){throw $message};$report.checks+=$message}
-function Read-SD {Get-Content -LiteralPath $configPath -Raw|ConvertFrom-Json}
+function Read-SD {[PinRealKeys]::ReadConfig($configPath)|ConvertFrom-Json}
 function Hash-SD {(Get-FileHash -LiteralPath $configPath).Hash}
 function Status-SD {[PinRealKeys]::Text($settings,138)}
 function Field-SD([int]$id){[PinRealKeys]::Text($settings,$id)}

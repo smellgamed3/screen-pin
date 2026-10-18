@@ -19,7 +19,7 @@ $startupBefore=[Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\
 function Assert-Tray($condition,[string]$message){if(-not $condition){throw $message};$report.checks+=$message}
 function Wait-Tray([scriptblock]$condition,[string]$description){$watch=[Diagnostics.Stopwatch]::StartNew();do{if(& $condition){return};Start-Sleep -Milliseconds 20}while($watch.ElapsedMilliseconds -lt 6000);throw ('Timeout: '+$description)}
 function Status-Tray {[PinRealKeys]::Text($settings,138)}
-function Config-Tray {Get-Content -LiteralPath $configPath -Raw|ConvertFrom-Json}
+function Config-Tray {[PinRealKeys]::ReadConfig($configPath)|ConvertFrom-Json}
 function Content-Tray($config){$copy=$config|ConvertTo-Json -Depth 20|ConvertFrom-Json;$copy.revision=0;foreach($profile in $copy.profiles){foreach($app in $profile.applications){if($null -ne $app.default){$app.default.revision=0};foreach($rule in $app.rules){$rule.preset.revision=0}}};return $copy|ConvertTo-Json -Depth 20 -Compress}
 function Hash-Tray {(Get-FileHash -LiteralPath $configPath).Hash}
 function Confirm-TrayProcess {$owner=Get-CimInstance Win32_Process -Filter ('ProcessId='+$process.Id);if(-not $owner -or $owner.ExecutablePath -ine $ExePath -or -not $owner.CommandLine.Contains('"'+$configDir+'"')){throw 'Owned application identity changed'}}

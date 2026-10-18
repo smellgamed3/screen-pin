@@ -36,7 +36,7 @@ $dailyPaths=@((Join-Path $parentLocalAppData 'ScreenPin/config.json'),(Join-Path
 $dailyHashes=@($dailyPaths|ForEach-Object {if(Test-Path -LiteralPath $_){(Get-FileHash -LiteralPath $_).Hash}else{$null}})
 $startupBefore=[Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run','ScreenPin',$null)
 function Assert-Upgrade($condition,[string]$message){if(-not $condition){throw $message};$report.passed_checks+=$message}
-function Read-Upgrade {Get-Content -LiteralPath $configPath -Raw|ConvertFrom-Json}
+function Read-Upgrade {[PinRealKeys]::ReadConfig($configPath)|ConvertFrom-Json}
 function Hash-Upgrade([string]$path){(Get-FileHash -LiteralPath $path).Hash}
 function Status-Upgrade {[PinRealKeys]::Text($settings,138)}
 function Wait-Upgrade([scriptblock]$condition,[string]$description){$watch=[Diagnostics.Stopwatch]::StartNew();do{[PinRealKeys]::AssertForeground();if(& $condition){return};Start-Sleep -Milliseconds 15}while($watch.ElapsedMilliseconds -lt 6000);throw ('Timeout: '+$description+'; '+(Status-Upgrade))}

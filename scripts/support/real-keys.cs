@@ -4,6 +4,8 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 public static class PinRealKeys {
+ // Test observers must not hold a handle that prevents atomic replacement.
+ public static string ReadConfig(string path){using(var stream=System.IO.File.Open(path,System.IO.FileMode.Open,System.IO.FileAccess.Read,System.IO.FileShare.ReadWrite|System.IO.FileShare.Delete))using(var reader=new System.IO.StreamReader(stream,System.Text.Encoding.UTF8,true))return reader.ReadToEnd();}
  public delegate bool EnumProc(IntPtr h,IntPtr d);
  private delegate IntPtr WndProc(IntPtr h,uint m,IntPtr w,IntPtr l);
  [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left,Top,Right,Bottom; }
@@ -14,6 +16,11 @@ public static class PinRealKeys {
  [StructLayout(LayoutKind.Explicit)] private struct InputData {[FieldOffset(0)]public Keyboard keyboard;[FieldOffset(0)]public Mouse mouse;}
  [StructLayout(LayoutKind.Sequential)] private struct Input {public uint type;public InputData data;}
  [StructLayout(LayoutKind.Sequential)] private struct MonitorInfo {public uint size;public Rect bounds,work;public uint flags;}
+ [StructLayout(LayoutKind.Sequential)] private struct Point {public int x,y;}
+ [DllImport("user32.dll")]private static extern bool GetCursorPos(out Point point);
+ [DllImport("user32.dll")]private static extern bool SetCursorPos(int x,int y);
+ [DllImport("user32.dll")]private static extern IntPtr WindowFromPoint(Point point);
+ [DllImport("user32.dll")]private static extern IntPtr GetAncestor(IntPtr h,uint flags);
  [DllImport("user32.dll")]private static extern bool EnumWindows(EnumProc callback,IntPtr d);
  [DllImport("user32.dll")]public static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)]private static extern int GetClassNameW(IntPtr h,StringBuilder b,int n);
@@ -103,7 +110,29 @@ public static class PinRealKeys {
   fixtureThread.IsBackground=true;fixtureThread.Start();
   if(!ready.Wait(3000))throw new InvalidOperationException("Fixture UI thread startup timed out");
   if(failure!=null)throw new InvalidOperationException(failure);
+  ActivateGuestWindow(Fixture,(uint)System.Diagnostics.Process.GetCurrentProcess().Id);
   return Fixture;
+ }
+ // Only an explicitly opted-in guest driver may use this real caption click.
+ // Host verifiers retain their original public-UIA activation and input guards.
+ public static void ActivateGuestWindow(IntPtr window,uint expectedPid){
+  var run=Environment.GetEnvironmentVariable("SCREEN_PIN_FIXTURE_GUEST");if(string.IsNullOrEmpty(run))return;
+  Guid id;var host=Environment.GetEnvironmentVariable("SCREEN_PIN_FIXTURE_HOST");
+  if(!Guid.TryParse(run,out id)||string.IsNullOrEmpty(host)||Environment.MachineName.Equals(host,StringComparison.OrdinalIgnoreCase)||!System.Security.Principal.WindowsIdentity.GetCurrent().Name.EndsWith("\\WDAGUtilityAccount",StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("Guest activation guard rejected this environment");
+  if(GetForegroundWindow()==window)return;
+  if((GetAsyncKeyState(1)&0x8000)!=0)throw new InvalidOperationException("Guest activation mouse button is already held; click cancelled");
+  uint owner;GetWindowThreadProcessId(window,out owner);Rect rect;Point cursor;
+  if(owner!=expectedPid||GetAncestor(window,2)!=window||!GetWindowRect(window,out rect)||!GetCursorPos(out cursor))throw new InvalidOperationException("Guest activation identity/bounds unavailable");
+  var point=new Point{x=rect.Left+(rect.Right-rect.Left)/2,y=rect.Top+12};
+  if(!SetWindowPos(window,new IntPtr(-1),0,0,0,0,0x13))throw new InvalidOperationException("Guest activation placement failed");
+  try{
+   Thread.Sleep(60);GetWindowThreadProcessId(window,out owner);
+   if(owner!=expectedPid||GetAncestor(WindowFromPoint(point),2)!=window||!SetCursorPos(point.x,point.y))throw new InvalidOperationException("Guest activation point is covered or ownership changed; click cancelled");
+   var input=new[]{new Input{data=new InputData{mouse=new Mouse{flags=2}}},new Input{data=new InputData{mouse=new Mouse{flags=4}}}};
+   if(SendInput(2,input,System.Runtime.InteropServices.Marshal.SizeOf(typeof(Input)))!=2){SendInput(1,new[]{new Input{data=new InputData{mouse=new Mouse{flags=4}}}},System.Runtime.InteropServices.Marshal.SizeOf(typeof(Input)));throw new InvalidOperationException("Guest caption click was incomplete");}
+   for(int i=0;i<100&&GetForegroundWindow()!=window;i++)Thread.Sleep(10);
+   if(GetForegroundWindow()!=window)throw new InvalidOperationException("Guest caption click did not activate the intended window");
+  }finally{SetWindowPos(window,new IntPtr(-2),0,0,0,0,0x13);SetCursorPos(cursor.x,cursor.y);}
  }
  public static void StopFixture(){ReleaseHeldKeys();if(Fixture!=IntPtr.Zero&&IsWindow(Fixture))PostMessageW(Fixture,0x10,IntPtr.Zero,IntPtr.Zero);if(fixtureThread!=null)fixtureThread.Join(2000);}
  public static void AssertForeground(){

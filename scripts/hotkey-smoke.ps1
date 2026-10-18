@@ -50,6 +50,7 @@ $report = [ordered]@{
     exit_code = $null
     forced_cleanup = $false
     errors = @()
+    feedback_read_timeouts = 0
     passed = $false
     limitations = @('One local desktop/display configuration and one synthetic standard Win32 fixture; does not validate real app compatibility, cross-DPI/multi-monitor p95, UAC, hardware typematic delivery, independent usability, or clean-machine installation.', 'Counter CPU/private-memory deltas are observations, not a leak proof or absolute CPU-instruction counts.', 'Foreground cannot be atomically locked together with Windows input dispatch; any observed mismatch aborts the run immediately, with only injected held-key releases permitted during emergency cleanup.')
 }
@@ -66,13 +67,18 @@ function Confirm-KeyProcess {
         throw 'Isolated executable/arguments no longer match; refusing process control.'
     }
 }
-function Key-Config { try { return Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json } catch { return $null } }
+function Key-Config { try { return [PinRealKeys]::ReadConfig($configPath)|ConvertFrom-Json } catch { return $null } }
 function Key-Status { return [PinRealKeys]::Text($settingsWindow, 138) }
 function Wait-Key([scriptblock]$Condition, [string]$Description, [int]$Timeout = 4000) {
     $watch = [Diagnostics.Stopwatch]::StartNew()
     do {
         [PinRealKeys]::AssertForeground()
-        if (& $Condition) { [PinRealKeys]::AssertForeground(); return }
+        try {
+            if (& $Condition) { [PinRealKeys]::AssertForeground(); return }
+        } catch {
+            if ($_.Exception.Message -notmatch 'Timed out reading own app result') { throw }
+            $report.feedback_read_timeouts++
+        }
         Start-Sleep -Milliseconds 5
     } while ($watch.ElapsedMilliseconds -lt $Timeout)
     throw ('Timed out: ' + $Description + '; app status: ' + (Key-Status))
@@ -196,7 +202,11 @@ try {
     $report.final_config_autostart=(Key-Config).settings.autostart
     if($report.final_config_autostart){throw 'Isolated configuration unexpectedly enabled auto-start.'}
     Stop-KeyApp
-} catch {$report.errors += $_.Exception.Message}
+} catch {
+    $report.errors += $_.Exception.Message
+    $report['failure_stack']=$_.ScriptStackTrace
+    try {$report['failure_observation']=@{status=(Key-Status);configuration=(Key-Config);foreground=[PinRealKeys]::GetForegroundWindow().ToInt64();fixture=[PinRealKeys]::Fixture.ToInt64()}}catch{$report['failure_observation_error']=$_.Exception.Message}
+}
 finally {
     try {[PinRealKeys]::ReleaseHeldKeys();[PinRealKeys]::StopFixture()}catch{$report.errors+=('Fixture cleanup: '+$_.Exception.Message)}
     try {Stop-KeyApp}catch{$report.errors+=('App cleanup: '+$_.Exception.Message)}

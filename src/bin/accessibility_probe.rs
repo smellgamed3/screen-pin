@@ -54,8 +54,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err("control HWND no longer belongs to the isolated app".into());
         }
         let element = unsafe { automation.ElementFromHandle(handle) }?;
-        if unsafe { element.CurrentProcessId() }? as u32 != expected {
-            return Err("UIA provider process does not match the isolated app".into());
+        let provider_pid = unsafe { element.CurrentProcessId() }? as u32;
+        if provider_pid != expected {
+            return Err(format!("UIA provider process does not match the isolated app: expected={expected}, window_owner={owner}, provider={provider_pid}, HWND={}", control.handle).into());
         }
         if focus {
             let root = unsafe { GetAncestor(handle, GA_ROOT) };

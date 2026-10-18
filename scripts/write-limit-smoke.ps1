@@ -31,7 +31,7 @@ $report=[ordered]@{started_utc=[DateTime]::UtcNow.ToString('o');exe_path=$ExePat
 $process=$null;$hostWindow=[IntPtr]::Zero;$settings=[IntPtr]::Zero;$limit=8*1024*1024
 $startupBefore=[Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run','ScreenPin',$null)
 function Assert-WL($value,[string]$message){if(-not $value){throw $message};$report.checks+=$message}
-function Read-WL {Get-Content -LiteralPath $configPath -Raw|ConvertFrom-Json}
+function Read-WL {[PinRealKeys]::ReadConfig($configPath)|ConvertFrom-Json}
 function Hash-WL([string]$path=$configPath){(Get-FileHash -LiteralPath $path).Hash}
 function Status-WL {[PinRealKeys]::Text($settings,138)}
 function Wait-WL([scriptblock]$condition,[string]$description){$watch=[Diagnostics.Stopwatch]::StartNew();do{[PinRealKeys]::AssertForeground();try{if(& $condition){return}}catch{if($_.Exception.Message -notmatch 'Timed out reading own app result'){throw}};Start-Sleep -Milliseconds 10}while($watch.ElapsedMilliseconds -lt 8000);throw ('Timeout: '+$description)}

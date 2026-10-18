@@ -35,7 +35,7 @@ $startupBefore=[Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\
 function Assert-Start($condition,[string]$message){if(-not $condition){throw $message};$report.checks+=$message}
 function Status-Start {[PinRealKeys]::Text($settings,138)}
 function Hash-Start([string]$path){(Get-FileHash -LiteralPath $path).Hash}
-function Read-Start {Get-Content -LiteralPath $configPath -Raw|ConvertFrom-Json}
+function Read-Start {[PinRealKeys]::ReadConfig($configPath)|ConvertFrom-Json}
 function Copy-Start($value){return $value|ConvertTo-Json -Depth 24|ConvertFrom-Json}
 function Wait-Start([scriptblock]$condition,[string]$description,[string]$foreground='fixture'){
     $wait=[Diagnostics.Stopwatch]::StartNew()

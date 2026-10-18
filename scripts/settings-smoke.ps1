@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+﻿#Requires -Version 7.0
 param(
     [string]$ExePath = (Join-Path $PSScriptRoot '../target/release/screen-pin.exe'),
     [string]$OutputDir = (Join-Path $PSScriptRoot '../artifacts/settings'),
@@ -18,7 +18,7 @@ $report = [ordered]@{
     exe_sha256=(Get-FileHash -LiteralPath $ExePath).Hash
     script_sha256=(Get-FileHash -LiteralPath $PSCommandPath).Hash
     helper_sha256=(Get-FileHash -LiteralPath $helperPath).Hash
-    config_dir=$configDir; storage_faults_requested=$StorageFaults.IsPresent;storage_faults=@();passed_checks=@(); real_input_cycles=@(); normal_exits=@(); errors=@(); passed=$false
+    config_dir=$configDir; storage_faults_requested=$StorageFaults.IsPresent;storage_faults=@();passed_checks=@(); real_input_cycles=@(); normal_exits=@(); errors=@(); passed=$false;metadata_reads=@();metadata_read_timeouts=0
     scope='Settings controls are edited with bounded native messages to the owned hidden GUI. Each accepted or retained mapping is exercised with real SendInput on the new fixture; no WM_HOTKEY injection.'
     limitations=@('Single local desktop/DPI and synthetic fixture; settings form editing is programmatic, not a keyboard navigation test.','Persistence failure uses a sharing lock on only the fresh test config; not every storage fault is covered.','Startup conflict is a controlled independent registration on the fixture thread, not an unrelated third-party application.')
 }
@@ -26,9 +26,21 @@ $process=$null; $settings=[IntPtr]::Zero; $hostWindow=[IntPtr]::Zero; $sequence=
 $storageBlockers=[Collections.Generic.List[string]]::new()
 $startupBefore=[Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run','ScreenPin',$null)
 function Assert-Settings($condition,[string]$message){if(-not $condition){throw $message};$report.passed_checks+=$message}
-function Read-Settings {Get-Content -LiteralPath $configPath -Raw|ConvertFrom-Json}
+function Read-Settings {[PinRealKeys]::ReadConfig($configPath)|ConvertFrom-Json}
 function Hash-Settings {(Get-FileHash -LiteralPath $configPath).Hash}
-function Status-Settings {[PinRealKeys]::Text($settings,138)}
+function Read-SettingsText([int]$id){
+    $watch=[Diagnostics.Stopwatch]::StartNew()
+    do{
+        try{
+            $value=[PinRealKeys]::Text($settings,$id)
+            $report.metadata_reads+=@{id=$id;elapsed_ms=$watch.Elapsed.TotalMilliseconds}
+            return $value
+        }catch{if($_.Exception.Message -notmatch 'Timed out reading own app result'){throw};$report.metadata_read_timeouts++}
+        Start-Sleep -Milliseconds 15
+    }while($watch.ElapsedMilliseconds -lt 1000)
+    throw ('Settings control '+$id+' did not answer within the metadata read budget')
+}
+function Status-Settings {Read-SettingsText 138}
 function Wait-Settings([scriptblock]$condition,[string]$description){
     $watch=[Diagnostics.Stopwatch]::StartNew()
     do{[PinRealKeys]::AssertForeground();if(& $condition){return};Start-Sleep -Milliseconds 15}while($watch.ElapsedMilliseconds -lt 6000)
@@ -70,7 +82,7 @@ function Edit-Settings([int]$restore,[int]$remember){
     Wait-Settings {(Status-Settings) -ne '正在处理…'} 'settings save completion'
 }
 function Assert-Registered([int]$restore,[int]$remember){
-    $status=[PinRealKeys]::Text($settings,208)
+    $status=(Read-SettingsText 208)
     Assert-Settings ($status -match ('恢复 Ctrl\+Alt\+F'+($restore-0x6f)+'：已注册') -and $status -match ('记住 Ctrl\+Alt\+F'+($remember-0x6f)+'：已注册')) ('Actual registered mapping is F'+($restore-0x6f)+'/F'+($remember-0x6f))
 }
 function Assert-Released([int]$key){
@@ -134,12 +146,12 @@ try{
         $initialPlacement=(Read-Settings).profiles[0].applications[0].default.placement|ConvertTo-Json -Depth 8 -Compress
         $initialFrame=[PinRealKeys]::Frame()
         $before=Hash-Settings;$backupBefore=(Get-FileHash -LiteralPath (Join-Path $configDir 'config.backup.json')).Hash
-        $undoBefore=[PinRealKeys]::Text($settings,144)
+        $undoBefore=(Read-SettingsText 144)
         Block-Storage 'backup-temp'
         try{
             Edit-Settings 0x7a 0x7b
             Assert-Settings ((Status-Settings) -match '^无法写入临时配置' -and (Hash-Settings) -eq $before -and (Get-FileHash -LiteralPath (Join-Path $configDir 'config.backup.json')).Hash -eq $backupBefore) 'Backup temporary creation failure preserves primary and backup bytes'
-            Assert-Settings ([PinRealKeys]::Text($settings,144) -ceq $undoBefore) 'Backup temporary creation failure retains the visible prior undo entry'
+            Assert-Settings ((Read-SettingsText 144) -ceq $undoBefore) 'Backup temporary creation failure retains the visible prior undo entry'
             Assert-Registered 0x78 0x79;Assert-Released 0x7a;Assert-Released 0x7b
             $report.storage_faults+=@{kind='backup-temp';status=Status-Settings;primary_hash=$before;backup_hash=$backupBefore;undo_label=$undoBefore}
         }finally{Clear-Storage}
@@ -148,14 +160,14 @@ try{
         Exercise-Settings 0x7a 0x7b 'after backup temporary failure retry'
         Edit-Settings 0x78 0x79
 
-        $before=Hash-Settings;$undoBefore=[PinRealKeys]::Text($settings,144);$savedFrame=[PinRealKeys]::Frame()
+        $before=Hash-Settings;$undoBefore=(Read-SettingsText 144);$savedFrame=[PinRealKeys]::Frame()
         $null=[PinRealKeys]::Move(580,380,490,360)
         Block-Storage 'primary-temp'
         try{
             [PinRealKeys]::Chord(0x79)
             Wait-Settings {(Status-Settings) -match '^无法写入临时配置'} 'primary temporary creation failure'
             Assert-Settings ((Hash-Settings) -eq $before -and (Get-FileHash -LiteralPath (Join-Path $configDir 'config.backup.json')).Hash -eq $before) 'Primary temporary creation failure retains primary and promotes only the prior valid config to backup'
-            Assert-Settings ([PinRealKeys]::Text($settings,144) -ceq $undoBefore) 'Failed real remember retains the visible prior undo entry'
+            Assert-Settings ((Read-SettingsText 144) -ceq $undoBefore) 'Failed real remember retains the visible prior undo entry'
             [PinRealKeys]::Chord(0x78)
             Wait-Settings {[PinRealKeys]::EdgeError([PinRealKeys]::Frame(),$savedFrame) -le 2 -and (Status-Settings) -match '^已恢复|^已符合预设'} 'runtime still restores the old placement after failed remember'
             Assert-Settings ((Hash-Settings) -eq $before) 'Old runtime placement remains authoritative after failed real remember'
@@ -224,7 +236,7 @@ try{
     try{
         $before=Hash-Settings
         Start-SettingsApp
-        $status=[PinRealKeys]::Text($settings,208)
+        $status=(Read-SettingsText 208)
         Assert-Settings ($status -match '恢复 Ctrl\+Alt\+F11：不可用' -and $status -match '记住 Ctrl\+Alt\+F12：已注册' -and (Hash-Settings) -eq $before) 'Startup conflict is honestly shown without silently rewriting saved bindings'
         Edit-Settings 0x78 0x7b
         Assert-Settings ((Status-Settings) -eq '设置已保存') 'Settings can repair the unavailable startup binding'
@@ -260,7 +272,7 @@ try{
         Start-SettingsApp
         [PinRealKeys]::Command($settings,$process.Id,211)
         Wait-Settings {(Status-Settings) -match '^已恢复有效备份'} 'recovery with registration conflict'
-        $status=[PinRealKeys]::Text($settings,208)
+        $status=(Read-SettingsText 208)
         Assert-Settings ($status -match '恢复 Ctrl\+Alt\+F9：已注册' -and $status -match '记住 Ctrl\+Alt\+F12：不可用' -and (Status-Settings) -match 'F12 注册失败') 'Recovery describes persisted keys and warns about the externally unavailable binding'
         Assert-Settings ([Convert]::ToBase64String([IO.File]::ReadAllBytes($configPath)) -eq [Convert]::ToBase64String($validBytes)) 'Recovery conflict does not silently change the backup settings'
         Assert-Released 0x79
@@ -313,7 +325,7 @@ try{
         Exercise-Settings 0x78 0x7a 'after preserved filename collision'
         Stop-SettingsApp
     }
-}catch{$report.errors+=$_.Exception.Message}
+}catch{$report.errors+=$_.Exception.Message;$report['failure_stack']=$_.ScriptStackTrace}
 finally{
     try{Clear-Storage}catch{$report.errors+=('Storage blocker cleanup: '+$_.Exception.Message)}
     try{Stop-SettingsApp}catch{$report.errors+=('App cleanup: '+$_.Exception.Message)}

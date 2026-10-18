@@ -23,7 +23,7 @@ $report=[ordered]@{started_utc=[DateTime]::UtcNow.ToString('o');exe_path=$ExePat
 $process=$null;$hostWindow=[IntPtr]::Zero;$settings=[IntPtr]::Zero
 $startupBefore=[Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run','ScreenPin',$null)
 function Assert-ER($condition,[string]$message){if(-not $condition){throw $message};$report.checks+=$message}
-function Read-ER {Get-Content -LiteralPath $configPath -Raw|ConvertFrom-Json}
+function Read-ER {[PinRealKeys]::ReadConfig($configPath)|ConvertFrom-Json}
 function Hash-ER {(Get-FileHash -LiteralPath $configPath).Hash}
 function Status-ER {[PinRealKeys]::Text($settings,138)}
 function Text-ER([int]$id){[PinRealKeys]::Text($settings,$id)}
