@@ -30,7 +30,7 @@ Windows 11 x64 窗口位置工具：记住应用窗口在指定显示器的位�
 - 预设编辑草稿在窗口恢复后保留；同一预设被更新时会提示冲突，拒绝旧草稿覆盖。点击刷新可放弃冲突草稿并载入最新值。
 - 设置页输入在恢复和刷新后保留，明确保存成功才生效；保存失败可直接重试，原有热键继续有效。
 
-当前交付为开发预览；实测范围和未验证项见 [阶段验收记录](docs/validation/phase-20.md) 和 [需求覆盖审计](docs/validation/coverage.md)。已补充干净 Windows Sandbox 的基本流程验证；物理多屏、混合 DPI、真实 UAC、系统重启／登录及独立人工验收仍未完成，尚不能视为最终验收通过。补充硬件与交互验证可按 [实机操作单](docs/validation/manual.md) 执行。
+当前交付为开发预览；实测范围和未验证项见 [当前验收记录](docs/validation/phase-27.md) 和 [需求覆盖审计](docs/validation/coverage.md)。已补充干净 Windows Sandbox 的基本流程验证；物理多屏、混合 DPI、真实 UAC、系统重启／登录及独立人工验收仍未完成，尚不能视为最终验收通过。补充硬件与交互验证可按 [实机操作单](docs/validation/manual.md) 执行。
 
 ## 开发
 
@@ -59,8 +59,8 @@ cargo run --locked --bin desktop_probe -- --output artifacts/desktop-probe.json
 
 [设计基线](docs/design.md) · [验收门槛](docs/acceptance.md) · [领域术语](CONTEXT.md)
 
-当前证据已按发布 EXE 统一整理，见[覆盖审计](docs/validation/coverage.md)及[阶段 26 验收顺序](docs/validation/phase-26.md)。19 项组件通过证据保持不变；[阶段 25](docs/validation/phase-25.md)的来宾 UIA 失败、相关宿主复测及实机门槛继续保留。
+当前发布包累计有 23 项组件通过证据，见[覆盖审计](docs/validation/coverage.md)及[阶段 27 实测](docs/validation/phase-27.md)。首轮 Brave 耗时失败、来宾 UIA 差异及剩余实机门槛分别保留，整体验收仍未完成。
 
 隔离来宾中的真实 Explorer 重启、开机启动登记与路径修复验证见 [阶段 21](docs/validation/phase-21.md)。系统重启登录仍待验证。
 
-系统大字体／高对比度的原始文字截断问题见 [阶段 22](docs/validation/phase-22.md)。`scripts/sandbox-smoke.ps1 -Appearance` 包含阅读门槛；阶段 23 最新候选通过了扩展后的 216 个单行文字样本、键盘及真实恢复检查。阶段 24 又补齐隔离热键、设置故障、草稿与竞态、启动及覆盖升级检查，累计 19 项当前构建组件通过；确认框／托盘及实际应用四项仍需宿主复测。用户已反馈保存／恢复正常，独立首次使用计时仍待证明，详见[当前进展](docs/validation/phase-24.md)。
+系统大字体／高对比度的原始文字截断问题见 [阶段 22](docs/validation/phase-22.md)。`scripts/sandbox-smoke.ps1 -Appearance` 包含阅读门槛，阶段 23 当前候选已通过扩展后的 216 个单行文字样本及相关回归。阶段 24 累计 19 项组件通过，阶段 27 又取得四项宿主通过证据，累计 23 项；首轮 Brave 耗时失败及复测分别保留。独立首次使用计时及实机门槛仍待证明，详见[当前进展](docs/validation/phase-27.md)。

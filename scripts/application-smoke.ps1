@@ -30,6 +30,7 @@ $hostWindow = [IntPtr]::Zero
 $runs = [Collections.Generic.List[object]]::new()
 $results = [Collections.Generic.List[object]]::new()
 $inputCancelled=$false
+$restoreTracePaths=@{}
 function Read-Control([IntPtr]$handle) {
     $text=[Text.StringBuilder]::new(32768)
     [PinApplication]::SendText($handle,0x0d,[IntPtr]$text.Capacity,$text)|Out-Null
@@ -179,10 +180,14 @@ function Confirm-DialogOwner($run,[IntPtr]$handle){
     if(-not $owner -or $owner.ExecutablePath -ine $run.executable -or -not $owner.CommandLine.Contains($run.profile) -or ($dialogPid -ne $run.pid -and $owner.ParentProcessId -ne $run.pid) -or -not [PinApplicationInput]::Owned($handle,$dialogPid,$run.handle,$run.pid)){throw 'Dialog process is not the verified isolated application or its direct profile-owned utility child'}
     return $dialogPid
 }
-function Keys-Application($run,[IntPtr]$handle,[int]$key,[int]$modifiers=0,[bool]$allowDialog=$false){
+function Keys-Application($run,[IntPtr]$handle,[int]$key,[int]$modifiers=0,[bool]$allowDialog=$false,[ref]$Timing=([ref]$null)){
+    $validationWatch=[Diagnostics.Stopwatch]::StartNew()
     Confirm-ApplicationOwner $run|Out-Null
     $ownerPid=if($handle -eq $run.handle){$run.pid}else{Confirm-DialogOwner $run $handle}
+    $validationMs=$validationWatch.Elapsed.TotalMilliseconds
+    $deliveryWatch=[Diagnostics.Stopwatch]::StartNew()
     [PinApplicationInput]::Chord($handle,$ownerPid,$run.handle,$run.pid,[ushort]$key,[uint32]$modifiers,$allowDialog)
+    if($PSBoundParameters.ContainsKey('Timing')){$Timing.Value=@{validation_ms=$validationMs;key_call_ms=$deliveryWatch.Elapsed.TotalMilliseconds}}
 }
 function Wait-HotApplication($run,[scriptblock]$condition,[string]$description){
     $watch=[Diagnostics.Stopwatch]::StartNew()
@@ -208,12 +213,16 @@ function Restore-HotApplication($run,$expected,[string]$scenario,[string]$scope=
     $before=Bounds-Application $run.handle
     if((Bounds-Error $before $expected) -le 2){throw 'No actual displacement before real restore'}
     $watch=[Diagnostics.Stopwatch]::StartNew()
-    Keys-Application $run $run.handle 0x78 3
+    $keyTiming=$null
+    Keys-Application $run $run.handle 0x78 3 -Timing ([ref]$keyTiming)
     Wait-HotApplication $run { (Bounds-Error (Bounds-Application $run.handle) $expected) -le 2 -and (Read-Control ([PinApplication]::GetDlgItem($ui,138))) -match '^已恢复|^已符合预设' } $scenario
     $elapsed=$watch.Elapsed.TotalMilliseconds
     $actual=Bounds-Application $run.handle;$status=Read-Control ([PinApplication]::GetDlgItem($ui,138))
     Assert-State ($status.Contains($scope) -and (Get-FileHash -LiteralPath $path).Hash -eq $hash) ($scenario+': actual F9 uses '+$scope+' without writing')
-    return @{scenario=$scenario;before=$before;expected=$expected;actual=$actual;edge_error_px=Bounds-Error $actual $expected;completion_ms=$elapsed;foreground_preserved=$true;config_unchanged=$true;feedback=$status}
+    $sample=@{scenario=$scenario;before=$before;expected=$expected;actual=$actual;edge_error_px=Bounds-Error $actual $expected;completion_ms=$elapsed;validation_ms=$keyTiming.validation_ms;key_call_ms=$keyTiming.key_call_ms;after_validation_ms=[Math]::Max([double]0,[double]($elapsed-$keyTiming.validation_ms));foreground_preserved=$true;config_unchanged=$true;feedback=$status}
+    if(-not $script:restoreTracePaths.ContainsKey($run.profile)){$script:restoreTracePaths[$run.profile]=Join-Path $OutputDir ($run.name+'-restore-samples-'+[Guid]::NewGuid().ToString('N')+'.jsonl')}
+    $sample|ConvertTo-Json -Depth 8 -Compress|Add-Content -LiteralPath $script:restoreTracePaths[$run.profile] -Encoding utf8
+    return $sample
 }
 function HotkeyStates-Application($run){
     $script:stateChecks=[Collections.Generic.List[string]]::new();$samples=@()
@@ -515,6 +524,7 @@ try {
             }
         }
         finally {
+            if($run -and $script:restoreTracePaths.ContainsKey($run.profile)){$result['restore_samples_path']=$script:restoreTracePaths[$run.profile]}
             if($run -and $run.handle -ne [IntPtr]::Zero){try{Close-Application $run;$result.cleanup='Normal WM_CLOSE; owned main process exited'}catch{$result.cleanup=$_.Exception.Message;$result.status='Failed'}}
             $results.Add($result)
         }
